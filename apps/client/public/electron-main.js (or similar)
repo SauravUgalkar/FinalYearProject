@@ -1,0 +1,8 @@
+const window = new BrowserWindow({
+  // webPreferences: {
+  //   preload: path.join(__dirname, 'preload.js')  // <-- comment out or remove
+  // }
+  webPreferences: {
+    // no preload
+  }
+});

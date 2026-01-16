@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: collab-code-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: collabcode
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - collab-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: collab-code-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - collab-network
+    command: redis-server --appendonly yes
+
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    container_name: collab-code-worker
+    restart: always
+    environment:
+      REDIS_URL: redis://redis:6379
+      MONGODB_URI: mongodb://admin:password123@mongodb:27017/collabcode
+      NODE_ENV: production
+    depends_on:
+      - redis
+      - mongodb
+    networks:
+      - collab-network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  collab-network:
+    driver: bridge
