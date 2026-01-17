@@ -46,6 +46,9 @@ export default function EditorPage() {
   const modificationTimers = useRef({});
   const [conflicts, setConflicts] = useState([]);
   const [conflictNotification, setConflictNotification] = useState(null);
+  const [yjsSyncActive, setYjsSyncActive] = useState(false);
+  const [yjsSyncMessage, setYjsSyncMessage] = useState('Syncing...');
+  const yjsSyncTimer = useRef(null);
   
   // Yjs state
   const yDocs = useRef(new Map()); // Map of fileName -> Yjs Doc
@@ -189,6 +192,20 @@ export default function EditorPage() {
     console.log(`[Yjs] Initialized Yjs document for ${fileName}`);
   }, []);
 
+  // Show Yjs sync notification
+  const showYjsSyncNotification = useCallback((message = 'Syncing...') => {
+    setYjsSyncMessage(message);
+    setYjsSyncActive(true);
+    
+    // Clear existing timer
+    if (yjsSyncTimer.current) clearTimeout(yjsSyncTimer.current);
+    
+    // Auto-hide after 2 seconds
+    yjsSyncTimer.current = setTimeout(() => {
+      setYjsSyncActive(false);
+    }, 2000);
+  }, []);
+
   // Request initial state from server for a file
   const requestYjsState = useCallback((fileName) => {
     if (!socket || !projectId) return;
@@ -221,6 +238,9 @@ export default function EditorPage() {
       // Get binary update
       const update = Y.encodeStateAsUpdate(yDocs.current.get(fileName));
       
+      // Show sync notification
+      showYjsSyncNotification('📤 Syncing edits...');
+      
       // Broadcast update
       socket.emit('yjs-sync', {
         roomId: projectId,
@@ -228,7 +248,7 @@ export default function EditorPage() {
         update: Array.from(update)
       });
     }
-  }, [socket, projectId]);
+  }, [socket, projectId, showYjsSyncNotification]);
 
   // Track line modification
   const trackLineModification = useCallback(async (fileName, lineNumber, content) => {
@@ -643,6 +663,9 @@ export default function EditorPage() {
     const handleYjsSync = (data) => {
       console.log('[Yjs] Received update for file:', data.fileName);
       const { fileName, update } = data;
+      
+      // Show incoming sync notification
+      showYjsSyncNotification('📥 Received changes...');
       
       if (yDocs.current.has(fileName)) {
         isRemoteChange.current = true;
@@ -1082,6 +1105,20 @@ export default function EditorPage() {
                 </div>
                 <div className="conflict-notification-details">
                   {conflictNotification.message}
+                </div>
+              </div>
+            )}
+
+            {/* Yjs Sync Notification */}
+            {yjsSyncActive && (
+              <div className="fixed top-4 right-4 z-50 animate-pulse">
+                <div className="bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 border border-blue-500">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 bg-white rounded-full animate-bounce"></span>
+                    <span className="inline-block w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                    <span className="inline-block w-2 h-2 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                  </div>
+                  <span className="font-medium">{yjsSyncMessage}</span>
                 </div>
               </div>
             )}

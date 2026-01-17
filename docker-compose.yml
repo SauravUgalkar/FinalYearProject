@@ -46,6 +46,42 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
+  server:
+    build:
+      context: ./apps/server
+      dockerfile: Dockerfile
+    container_name: collab-code-server
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      MONGODB_URI: mongodb://admin:password123@mongodb:27017/collabcode
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your_secret_key
+      NODE_ENV: production
+    depends_on:
+      - redis
+      - mongodb
+    networks:
+      - collab-network
+
+  client:
+    build:
+      context: ./apps/client
+      dockerfile: Dockerfile
+    container_name: collab-code-client
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      REACT_APP_API_URL: http://localhost:5000
+    depends_on:
+      - server
+    networks:
+      - collab-network
+
 volumes:
   mongodb_data:
   redis_data:

@@ -9,7 +9,9 @@
     "apps/worker"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\" \"wait-on http://localhost:3000 && npm run electron-start --workspace=apps/client\"",
+    "dev": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\"",
+    "dev:web": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\"",
+    "dev:electron": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\" \"wait-on http://localhost:3000 && npm run electron-start --workspace=apps/client\"",
     "dev:old": "npm run dev --workspaces",
     "build": "npm run build --workspaces",
     "start": "npm start --workspace=apps/server",

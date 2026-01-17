@@ -54,7 +54,7 @@ export default function Settings({ projectId, onClose }) {
     try {
       const token = localStorage.getItem('token');
       await axios.post(
-        `http://localhost:5000/api/projects/${projectId}/invite`,
+        `http://localhost:5000/api/projects/${projectId}/share`,
         { email: inviteEmail, role: inviteRole },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -73,16 +73,20 @@ export default function Settings({ projectId, onClose }) {
   const handleChangeRole = async (userId, newRole) => {
     try {
       const token = localStorage.getItem('token');
-      await axios.put(
-        `http://localhost:5000/api/projects/${projectId}/users/${userId}/role`,
-        { role: newRole },
+      const response = await axios.post(
+        `http://localhost:5000/api/projects/${projectId}/share`,
+        { 
+          email: projectUsers.find(u => (u._id || u.id) === userId)?.email,
+          role: newRole 
+        },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       
       fetchProjectUsers();
+      alert('User role updated successfully!');
     } catch (error) {
       console.error('Error changing role:', error);
-      alert('Failed to change user role');
+      alert(error.response?.data?.error || 'Failed to change user role');
     }
   };
 
@@ -92,14 +96,15 @@ export default function Settings({ projectId, onClose }) {
     try {
       const token = localStorage.getItem('token');
       await axios.delete(
-        `http://localhost:5000/api/projects/${projectId}/users/${userId}`,
+        `http://localhost:5000/api/projects/${projectId}/collaborators/${userId}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       
       fetchProjectUsers();
+      alert('User removed successfully!');
     } catch (error) {
       console.error('Error removing user:', error);
-      alert('Failed to remove user');
+      alert(error.response?.data?.error || 'Failed to remove user');
     }
   };
 
@@ -121,7 +126,7 @@ export default function Settings({ projectId, onClose }) {
   return (
     <div className="h-full flex flex-col bg-gray-900 text-gray-100">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+      <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between bg-gray-950">
         <div>
           <h2 className="text-xl font-bold text-white">Project Settings</h2>
           <p className="text-xs text-gray-400 mt-1">Manage users and permissions</p>
@@ -135,13 +140,13 @@ export default function Settings({ projectId, onClose }) {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-800">
+      <div className="flex border-b border-gray-800 bg-gray-950">
         <button
           onClick={() => setActiveTab('users')}
           className={`px-6 py-3 font-medium transition ${
             activeTab === 'users'
-              ? 'text-blue-400 border-b-2 border-blue-400'
-              : 'text-gray-400 hover:text-white'
+              ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-900'
+              : 'text-gray-400 hover:text-white hover:bg-gray-800'
           }`}
         >
           Users & Permissions
@@ -150,8 +155,8 @@ export default function Settings({ projectId, onClose }) {
           onClick={() => setActiveTab('general')}
           className={`px-6 py-3 font-medium transition ${
             activeTab === 'general'
-              ? 'text-blue-400 border-b-2 border-blue-400'
-              : 'text-gray-400 hover:text-white'
+              ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-900'
+              : 'text-gray-400 hover:text-white hover:bg-gray-800'
           }`}
         >
           General
@@ -207,33 +212,34 @@ export default function Settings({ projectId, onClose }) {
 
             {/* Current Users */}
             <div>
-              <h3 className="text-sm font-semibold text-white mb-3">
+              <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                <UserIcon size={16} className="text-purple-400" />
                 Project Members ({projectUsers.length})
               </h3>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {projectUsers.map(user => (
                   <div
                     key={user._id || user.id}
                     className="bg-gray-800 border border-gray-700 rounded-lg p-4 flex items-center justify-between hover:border-gray-600 transition"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0">
                         {(user.name || user.email || 'U')[0].toUpperCase()}
                       </div>
-                      <div>
-                        <p className="text-white font-medium text-sm">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-white font-medium text-sm truncate">
                           {user.name || 'Unknown User'}
                           {user._id === currentUser?.id && (
-                            <span className="text-xs text-gray-500 ml-2">(You)</span>
+                            <span className="text-xs text-blue-400 ml-2">(You)</span>
                           )}
                         </p>
-                        <p className="text-gray-400 text-xs">{user.email}</p>
+                        <p className="text-gray-400 text-xs truncate">{user.email}</p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 flex-shrink-0">
                       {user.isOwner ? (
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${getRoleColor('owner')}`}>
+                        <span className={`px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1.5 ${getRoleColor('owner')}`}>
                           {getRoleIcon('owner')}
                           Owner
                         </span>
@@ -242,7 +248,7 @@ export default function Settings({ projectId, onClose }) {
                           <select
                             value={user.role}
                             onChange={(e) => handleChangeRole(user._id || user.id, e.target.value)}
-                            className="px-3 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:border-blue-500"
+                            className="px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-white focus:outline-none focus:border-blue-500 min-w-[100px]"
                             disabled={user._id === currentUser?.id}
                           >
                             <option value="viewer">Viewer</option>
@@ -252,6 +258,7 @@ export default function Settings({ projectId, onClose }) {
                             onClick={() => handleRemoveUser(user._id || user.id)}
                             className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-700 rounded transition"
                             title="Remove user"
+                            disabled={user._id === currentUser?.id}
                           >
                             <Trash2 size={16} />
                           </button>
