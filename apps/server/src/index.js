@@ -83,6 +83,55 @@ const queueEvents = new QueueEvents("code-execution", {
 // Store roomId mapping for jobs
 const jobRoomMap = new Map();
 
+// Persist execution analytics per user for the project (room)
+const persistAnalyticsForJob = async (jobInfo, status, executionTime = 0) => {
+  if (!jobInfo?.roomId || !jobInfo?.userId) return;
+
+  try {
+    const project = await Project.findById(jobInfo.roomId);
+    if (!project) return;
+
+    if (!Array.isArray(project.analytics)) {
+      project.analytics = [];
+    }
+
+    let userAnalytics = project.analytics.find(
+      (a) => a.userId && a.userId.toString() === String(jobInfo.userId)
+    );
+
+    if (!userAnalytics) {
+      userAnalytics = {
+        userId: jobInfo.userId,
+        userName: jobInfo.userName || "Unknown",
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        totalErrors: 0,
+        executionTimes: [],
+        lastActivity: new Date(),
+      };
+      project.analytics.push(userAnalytics);
+    }
+
+    userAnalytics.totalRuns += 1;
+    userAnalytics.lastActivity = new Date();
+
+    if (status === "success") {
+      userAnalytics.successfulRuns += 1;
+      if (typeof executionTime === "number") {
+        userAnalytics.executionTimes.push(executionTime);
+      }
+    } else {
+      userAnalytics.failedRuns += 1;
+      userAnalytics.totalErrors += 1;
+    }
+
+    await project.save();
+  } catch (err) {
+    console.error("[Analytics] Failed to persist execution analytics:", err.message);
+  }
+};
+
 // Listen for job events - use all events to debug
 queueEvents.on("progress", (jobId, progress) => {
   console.log(`[Queue] Progress event - Job: ${jobId}, Progress: ${progress}`);
@@ -121,6 +170,18 @@ queueEvents.on("completed", (job) => {
           status: 'success'
         });
       }
+      // Broadcast to room so owners/collaborators can see others' runs
+      io.to(roomId).emit('execution-activity', {
+        jobId,
+        userId: jobInfo.userId,
+        userName: jobInfo.userName,
+        output: returnvalue?.output || '',
+        executionTime: returnvalue?.executionTime || 0,
+        status: returnvalue?.status === 'error' ? 'error' : 'success',
+      });
+
+      // Persist analytics for the user
+      persistAnalyticsForJob(jobInfo, 'success', returnvalue?.executionTime || 0);
       jobRoomMap.delete(jobId);
     } else {
       console.warn(`[Queue] No job info found for job ${jobId}`);
@@ -136,12 +197,24 @@ queueEvents.on("failed", (job) => {
   if (jobId) {
     const jobInfo = jobRoomMap.get(jobId);
     if (jobInfo) {
-      const { socketId } = jobInfo;
+      const { socketId, roomId } = jobInfo;
       console.log(`[Queue] Emitting execution-error to socket ${socketId}`);
       io.to(socketId).emit('execution-error', {
         jobId: jobId,
         error: failedReason || 'Job failed'
       });
+
+      // Broadcast to the room for visibility
+      io.to(roomId).emit('execution-activity', {
+        jobId,
+        userId: jobInfo.userId,
+        userName: jobInfo.userName,
+        error: failedReason || 'Job failed',
+        status: 'error',
+      });
+
+      // Persist failed analytics
+      persistAnalyticsForJob(jobInfo, 'error', 0);
       jobRoomMap.delete(jobId);
     }
   }
@@ -185,6 +258,7 @@ app.use("/api/analytics", require("./routes/analytics"));
 app.use("/api/github", require("./routes/github"));
 app.use("/api/recordings", require("./routes/recordings"));
 app.use("/api/git", require("./routes/git"));
+app.use("/api/chat", require("./routes/chat"));
 
 // -----------------------------------------------------------------------------
 // SOCKET.IO

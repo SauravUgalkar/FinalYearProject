@@ -2,17 +2,32 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import LogoutConfirmModal from '../components/LogoutConfirmModal';
+import { disconnectSocket } from '../hooks/useSocket';
 
 export default function Profile() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [weaknesses, setWeaknesses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const handleLogout = () => {
+    setShowLogoutModal(true);
+  };
+
+  const confirmLogout = () => {
+    // Disconnect socket before logout
+    disconnectSocket();
+    
+    // Clear all session data
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    navigate('/login');
+    localStorage.removeItem('github_token');
+    setShowLogoutModal(false);
+    
+    // Navigate to login page
+    navigate('/login', { replace: true });
   };
 
   useEffect(() => {
@@ -29,7 +44,17 @@ export default function Profile() {
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      setUser(response.data);
+      // Fetch all projects to calculate collaborations
+      const projectsResponse = await axios.get('http://localhost:5000/api/projects', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      const totalCollaborations = projectsResponse.data.reduce(
+        (sum, p) => sum + (p.collaborators ? p.collaborators.length : 0),
+        0
+      );
+      
+      setUser({ ...response.data, totalCollaborations });
 
       // Fetch weaknesses
       const weaknessResponse = await axios.get(
@@ -101,6 +126,13 @@ export default function Profile() {
         )}
       </div>
       </div>
+
+      {/* Logout Confirmation Modal */}
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onConfirm={confirmLogout}
+        onCancel={() => setShowLogoutModal(false)}
+      />
     </div>
   );
 }

@@ -45,3 +45,13 @@ export function useSocket() {
 
   return { socket };
 }
+
+// Helper function to disconnect and reset socket (called on logout)
+export function disconnectSocket() {
+  if (socketInstance) {
+    console.log('[useSocket] Disconnecting socket:', socketInstance.id);
+    socketInstance.disconnect();
+    socketInstance = null;
+    isInitialized = false;
+  }
+}

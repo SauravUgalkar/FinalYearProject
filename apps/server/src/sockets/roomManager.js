@@ -13,9 +13,6 @@ class RoomManager {
 
   async joinRoom(socket, roomId, userId, userName) {
     try {
-      // Add user to socket room
-      socket.join(roomId);
-      
       // Track user in room; bootstrap codeState from DB on first join
       if (!this.activeRooms.has(roomId)) {
         const project = await Project.findById(roomId).lean();
@@ -38,6 +35,9 @@ class RoomManager {
       }
 
       const room = this.activeRooms.get(roomId);
+      
+      // Add user to socket room
+      socket.join(roomId);
       room.users.set(socket.id, { userId, userName, cursorPosition: { line: 0, column: 0 } });
       this.userRoomMap.set(socket.id, roomId);
 
@@ -60,6 +60,9 @@ class RoomManager {
         codeState: room.codeState,
         activeUsers: Array.from(room.users.values())
       });
+
+      // Broadcast updated user list to entire room
+      this.io.to(roomId).emit('room-users', Array.from(room.users.values()));
 
       // Save to database
       await this.saveRoomState(roomId, room);
@@ -179,21 +182,17 @@ class RoomManager {
       console.error('[RoomManager] Failed to persist file change to MongoDB:', err.message);
     }
 
-    // Simple broadcast rate-limit per socket to reduce spam
-    const now = Date.now();
-    const last = this.codeChangeThrottle.get(socket.id) || 0;
-    const THROTTLE_MS = 30; // ~33 messages/sec
-
-    if (now - last >= THROTTLE_MS || isNewFile) {
-      this.codeChangeThrottle.set(socket.id, now);
-      // Broadcast to all in room except sender
+    // Note: Real-time sync is now handled by Yjs (yjs-sync events)
+    // The code-changed broadcast is disabled to prevent duplication with Yjs
+    // Only new files are broadcast via code-changed
+    if (isNewFile) {
       socket.to(roomId).emit('code-changed', {
         fileId,
         fileName: data.fileName,
         content,
         language: data.language,
         modifiedBy: user.userName,
-        isNewFile,
+        isNewFile: true,
         timestamp: new Date(),
         hasConflicts: conflicts.length > 0
       });
@@ -272,6 +271,20 @@ class RoomManager {
       room.chatHistory = room.chatHistory.slice(-100);
     }
 
+    // Persist chat message to Project for durability across sessions
+    try {
+      Project.findByIdAndUpdate(
+        roomId,
+        {
+          $push: { chatHistory: message },
+          $set: { updatedAt: new Date() }
+        },
+        { new: false }
+      ).catch(err => console.error('[RoomManager] Failed to persist chat message:', err.message));
+    } catch (err) {
+      console.error('[RoomManager] Chat persistence error:', err.message);
+    }
+
     // Broadcast to all in room (including sender)
     this.io.to(roomId).emit('chat-message-received', message);
   }
@@ -321,8 +334,13 @@ class RoomManager {
       
       // Store the job-room-socket mapping for later result delivery (user-specific)
       if (global.jobRoomMap) {
-        global.jobRoomMap.set(job.id, { roomId, socketId: socket.id });
-        console.log(`[RoomManager] Stored mapping: job ${job.id} -> room ${roomId}, socket ${socket.id}`);
+        global.jobRoomMap.set(job.id, {
+          roomId,
+          socketId: socket.id,
+          userId: user.userId,
+          userName: user.userName,
+        });
+        console.log(`[RoomManager] Stored mapping: job ${job.id} -> room ${roomId}, socket ${socket.id}, user ${user.userName}`);
       }
       
       socket.emit('execution-started', { jobId: job.id });
@@ -410,6 +428,9 @@ class RoomManager {
         userName: user.userName,
         activeUsers: Array.from(room.users.values())
       });
+
+      // Broadcast updated user list to entire room
+      this.io.to(roomId).emit('room-users', Array.from(room.users.values()));
 
       // Clean up empty rooms
       if (room.users.size === 0) {

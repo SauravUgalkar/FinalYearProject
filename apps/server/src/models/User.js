@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   avatar: { type: String },
   githubId: { type: String },
+  githubAccessToken: { type: String },
   googleId: { type: String },
   codingLanguages: [String],
   totalProjects: { type: Number, default: 0 },

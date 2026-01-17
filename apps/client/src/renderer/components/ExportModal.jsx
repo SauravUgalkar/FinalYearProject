@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Download, X, Github } from 'lucide-react';
+import { Download, X, Github, LogIn } from 'lucide-react';
 
 export default function ExportModal({ isOpen, onClose, projectId, files, projectName }) {
   const [exportFormat, setExportFormat] = useState('json');
-  const [githubToken, setGithubToken] = useState(localStorage.getItem('github_token') || '');
-  const [githubUsername, setGithubUsername] = useState('');
+  const [githubLinked, setGithubLinked] = useState(!!localStorage.getItem('github_token'));
   const [isExporting, setIsExporting] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Check for GitHub token on mount
+  useEffect(() => {
+    const token = localStorage.getItem('github_token');
+    setGithubLinked(!!token);
+  }, [isOpen]);
 
   const handleExportJSON = () => {
     const projectData = {
@@ -73,141 +79,57 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
   };
 
   const handleExportGitHub = async () => {
-    if (!githubToken.trim()) {
-      alert('Please enter your GitHub Personal Access Token (PAT).\n\nCreate one at: https://github.com/settings/tokens\nRequire scopes: repo');
-      return;
-    }
-
-    if (!githubUsername.trim()) {
-      alert('Please enter your GitHub username');
-      return;
-    }
-
     setIsExporting(true);
     try {
-      const repoName = projectName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-      const owner = githubUsername;
+      const repoName = projectName
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9-]/g, '') || 'collabcode-project';
 
-      // Create repository
-      console.log('[GitHub] Creating repository:', repoName);
-      const createRepoRes = await fetch('https://api.github.com/user/repos', {
+      const authToken = localStorage.getItem('token');
+      if (!authToken) {
+        throw new Error('You must be logged in to export to GitHub');
+      }
+
+      let response = await fetch(`http://localhost:5000/api/github/export/${projectId}`, {
         method: 'POST',
         headers: {
-          Authorization: `token ${githubToken}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
         },
-        body: JSON.stringify({
-          name: repoName,
-          description: `Project: ${projectName} - Exported from CollabCode`,
-          private: false,
-          auto_init: true
-        })
+        body: JSON.stringify({ repositoryName: repoName })
       });
 
-      if (!createRepoRes.ok) {
-        const error = await createRepoRes.json();
-        throw new Error(error.message || 'Failed to create repository');
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        // If needs GitHub auth, start OAuth flow and retry automatically
+        if (error.needsAuth && error.authUrl) {
+          await startGithubLoginWithAuth(error.authUrl);
+          // Retry export after linking
+          response = await fetch(`http://localhost:5000/api/github/export/${projectId}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ repositoryName: repoName })
+          });
+          if (!response.ok) {
+            const retryErr = await response.json().catch(() => ({}));
+            throw new Error(retryErr.error || 'GitHub export failed after linking');
+          }
+        } else {
+          throw new Error(error.error || 'GitHub export failed');
+        }
       }
 
-      const repo = await createRepoRes.json();
-      const repoUrl = repo.clone_url;
-      console.log('[GitHub] Repository created:', repo.html_url);
-
-      // Prepare files content
-      const filesData = {};
-      files.forEach(file => {
-        filesData[file.name] = {
-          content: file.content
-        };
-      });
-
-      // Add README
-      filesData['README.md'] = {
-        content: `# ${projectName}\n\nExported from CollabCode\n\nExported at: ${new Date().toISOString()}\n\n## Files\n${files.map(f => `- ${f.name}`).join('\n')}`
-      };
-
-      // Create tree
-      console.log('[GitHub] Creating file tree...');
-      const treeData = Object.entries(filesData).map(([path, data]) => ({
-        path,
-        mode: '100644',
-        type: 'blob',
-        content: data.content
-      }));
-
-      const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/git/trees`, {
-        method: 'POST',
-        headers: {
-          Authorization: `token ${githubToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          tree: treeData
-        })
-      });
-
-      if (!treeRes.ok) {
-        throw new Error('Failed to create file tree');
+      const data = await response.json();
+      // Mark as linked client-side as well
+      localStorage.setItem('github_token', 'linked');
+      alert(`✅ Exported to GitHub: ${data.repositoryUrl}`);
+      if (data.repositoryUrl) {
+        window.open(data.repositoryUrl, '_blank');
       }
-
-      const tree = await treeRes.json();
-
-      // Get main branch commit
-      const branchRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/git/ref/heads/main`, {
-        headers: { Authorization: `token ${githubToken}` }
-      });
-
-      if (!branchRes.ok) {
-        throw new Error('Failed to get branch reference');
-      }
-
-      const branch = await branchRes.json();
-      const baseCommitSha = branch.object.sha;
-
-      // Create commit
-      console.log('[GitHub] Creating commit...');
-      const commitRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/git/commits`, {
-        method: 'POST',
-        headers: {
-          Authorization: `token ${githubToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          message: `Initial commit from CollabCode export`,
-          tree: tree.sha,
-          parents: [baseCommitSha]
-        })
-      });
-
-      if (!commitRes.ok) {
-        throw new Error('Failed to create commit');
-      }
-
-      const commit = await commitRes.json();
-
-      // Update branch
-      console.log('[GitHub] Updating branch...');
-      const updateRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/git/refs/heads/main`, {
-        method: 'PATCH',
-        headers: {
-          Authorization: `token ${githubToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          sha: commit.sha
-        })
-      });
-
-      if (!updateRes.ok) {
-        throw new Error('Failed to update branch');
-      }
-
-      // Save token for future use
-      localStorage.setItem('github_token', githubToken);
-      localStorage.setItem('github_username', githubUsername);
-
-      alert(`✅ Successfully exported to GitHub!\n\nRepository: ${repo.html_url}`);
-      window.open(repo.html_url, '_blank');
       onClose();
     } catch (err) {
       console.error('[GitHub Export Error]:', err);
@@ -215,6 +137,75 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const startGithubLogin = async () => {
+    try {
+      setAuthLoading(true);
+      const res = await fetch('http://localhost:5000/api/github/auth-url');
+      const data = await res.json();
+      if (data.authUrl) {
+        // Open GitHub OAuth in a popup window
+        const width = 600;
+        const height = 700;
+        const left = window.screen.width / 2 - width / 2;
+        const top = window.screen.height / 2 - height / 2;
+        const popup = window.open(
+          data.authUrl,
+          'GitHub Login',
+          `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
+        );
+
+        // Poll for the popup to close and check for token
+        const pollTimer = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(pollTimer);
+            setAuthLoading(false);
+            // Check if token was saved
+            const token = localStorage.getItem('github_token');
+            if (token) {
+              setGithubLinked(true);
+              alert('GitHub connected successfully!');
+            }
+          }
+        }, 500);
+      } else {
+        alert(data.error || 'GitHub OAuth not configured');
+        setAuthLoading(false);
+      }
+    } catch (err) {
+      console.error('GitHub auth init failed:', err);
+      alert('Failed to start GitHub login');
+      setAuthLoading(false);
+    }
+  };
+
+  // Start GitHub OAuth with provided authUrl and attach Authorization header for token persistence
+  const startGithubLoginWithAuth = async (authUrl) => {
+    return new Promise((resolve) => {
+      const width = 600;
+      const height = 700;
+      const left = window.screen.width / 2 - width / 2;
+      const top = window.screen.height / 2 - height / 2;
+      const popup = window.open(
+        authUrl,
+        'GitHub Login',
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
+      );
+
+      const pollTimer = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(pollTimer);
+          const token = localStorage.getItem('github_token');
+          if (token) {
+            setGithubLinked(true);
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        }
+      }, 500);
+    });
   };
 
   if (!isOpen) return null;
@@ -288,37 +279,28 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
 
           {exportFormat === 'github' && (
             <div className="mt-4 p-3 bg-gray-700 border border-gray-600 rounded space-y-2">
-              <div>
-                <label className="text-white text-xs font-semibold block mb-1">GitHub Username</label>
-                <input
-                  type="text"
-                  value={githubUsername}
-                  onChange={(e) => setGithubUsername(e.target.value)}
-                  placeholder="your-github-username"
-                  className="w-full px-2 py-1 bg-gray-600 text-white rounded text-xs border border-gray-500 focus:outline-none focus:border-blue-400"
-                />
-              </div>
-              <div>
-                <label className="text-white text-xs font-semibold block mb-1">
-                  GitHub Personal Access Token
-                  <a
-                    href="https://github.com/settings/tokens"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 ml-1 hover:underline"
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-white text-sm font-semibold">GitHub Access</p>
+                  <p className="text-gray-400 text-xs">{githubLinked ? 'Connected' : 'Sign in to push directly'}</p>
+                </div>
+                {!githubLinked && (
+                  <button
+                    type="button"
+                    onClick={startGithubLogin}
+                    disabled={authLoading}
+                    className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded flex items-center gap-1 disabled:opacity-60"
                   >
-                    (Create)
-                  </a>
-                </label>
-                <input
-                  type="password"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  placeholder="ghp_..."
-                  className="w-full px-2 py-1 bg-gray-600 text-white rounded text-xs border border-gray-500 focus:outline-none focus:border-blue-400"
-                />
-                <p className="text-gray-400 text-xs mt-1">✓ Token saved locally for future exports</p>
+                    <LogIn size={14} /> {authLoading ? 'Opening...' : 'Sign in'}
+                  </button>
+                )}
               </div>
+
+              {githubLinked && (
+                <div className="text-xs text-green-400 bg-gray-800 border border-gray-700 rounded px-2 py-1">
+                  ✓ GitHub connected (token stored server-side)
+                </div>
+              )}
             </div>
           )}
         </div>

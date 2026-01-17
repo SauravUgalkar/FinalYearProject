@@ -4,11 +4,12 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { Users, TrendingUp, Activity, ChevronLeft, User } from 'lucide-react';
 import AllUsersAnalytics from './AllUsersAnalytics';
 
-export default function Analytics({ data, allUsersData }) {
+export default function Analytics({ data, allUsersData, activityFeed = [] }) {
   const [selectedUser, setSelectedUser] = useState(null);
   
   // If we have allUsersData, show list view for owner
   const isOwnerView = allUsersData && allUsersData.length > 0;
+  const recentActivity = activityFeed.slice(0, 8);
 
   // If a user is selected, show their individual analytics
   if (selectedUser) {
@@ -35,6 +36,28 @@ export default function Analytics({ data, allUsersData }) {
           <h3 className="text-white font-bold text-lg">Team Members</h3>
           <span className="text-gray-400 text-sm">({allUsersData.length} collaborator{allUsersData.length !== 1 ? 's' : ''})</span>
         </div>
+
+        {recentActivity.length > 0 && (
+          <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg">
+            <p className="text-gray-300 text-sm font-medium mb-3 flex items-center gap-2">
+              <Activity size={16} className="text-blue-400" />
+              Live execution activity
+            </p>
+            <div className="space-y-2 max-h-48 overflow-auto pr-1">
+              {recentActivity.map((item, idx) => (
+                <div key={idx} className="flex items-start justify-between bg-gray-900 px-3 py-2 rounded">
+                  <div>
+                    <p className="text-sm text-white font-semibold">{item.userName || 'Unknown'}</p>
+                    <p className="text-xs text-gray-400 break-all">{item.status === 'success' ? 'Ran code successfully' : 'Execution error'}{item.executionTime ? ` • ${item.executionTime}ms` : ''}</p>
+                  </div>
+                  <span className={`text-xs font-semibold ${item.status === 'success' ? 'text-green-400' : 'text-red-400'}`}>
+                    {item.status === 'success' ? 'Success' : 'Error'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         
         <div className="space-y-2">
           {allUsersData.map((user, index) => {

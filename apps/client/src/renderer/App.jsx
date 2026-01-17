@@ -8,6 +8,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Editor from './pages/Editor';
 import Profile from './pages/Profile';
+import GithubCallback from './pages/GithubCallback';
 
 // Components
 
@@ -91,6 +92,7 @@ function App() {
           path="/editor/:projectId"
           element={<ProtectedRoute element={<Editor />} user={user} />}
         />
+        <Route path="/github/callback" element={<GithubCallback />} />
         <Route
           path="/profile"
           element={<ProtectedRoute element={<Profile />} user={user} />}

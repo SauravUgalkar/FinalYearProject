@@ -4,6 +4,8 @@ import { Plus, Folder, Trash2, Share2, Clock, Code2, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom';
 import ShareModal from '../components/ShareModal';
 import Navbar from '../components/Navbar';
+import LogoutConfirmModal from '../components/LogoutConfirmModal';
+import { disconnectSocket } from '../hooks/useSocket';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -12,6 +14,7 @@ export default function Dashboard() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -19,9 +22,21 @@ export default function Dashboard() {
   });
 
   const handleLogout = () => {
+    setShowLogoutModal(true);
+  };
+
+  const confirmLogout = () => {
+    // Disconnect socket before logout
+    disconnectSocket();
+    
+    // Clear all session data
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    navigate('/login');
+    localStorage.removeItem('github_token');
+    setShowLogoutModal(false);
+    
+    // Navigate to login page
+    navigate('/login', { replace: true });
   };
 
   useEffect(() => {
@@ -100,6 +115,11 @@ export default function Dashboard() {
     );
   }
 
+  const totalCollaborators = projects.reduce(
+    (sum, p) => sum + (p.collaborators ? p.collaborators.length : 0),
+    0
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
       <Navbar showLogout={true} onLogout={handleLogout} />
@@ -146,7 +166,7 @@ export default function Dashboard() {
               <div>
                 <p className="text-gray-400 text-sm font-medium">Collaborations</p>
                 <p className="text-3xl font-bold text-white mt-2">
-                  {projects.filter(p => p.collaborators && p.collaborators.length > 0).length}
+                  {totalCollaborators}
                 </p>
               </div>
               <div className="p-3 bg-green-600 bg-opacity-20 rounded-lg">
@@ -273,18 +293,33 @@ export default function Dashboard() {
                 {project.description || 'No description provided'}
               </p>
 
-              <div className="flex items-center justify-between pt-4 border-t border-gray-800">
-                <span className="text-xs bg-gradient-to-r from-blue-600 to-purple-600 text-white px-3 py-1.5 rounded-lg font-medium">
-                  {project.language}
-                </span>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
-                  {project.collaborators && project.collaborators.length > 0 && (
-                    <div className="flex items-center gap-1" title={`${project.collaborators.length} collaborators`}>
-                      <Users size={14} />
-                      <span>{project.collaborators.length}</span>
+              <div className="pt-4 border-t border-gray-800 space-y-2">
+                {project.collaborators && project.collaborators.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex -space-x-2">
+                      {project.collaborators.slice(0, 3).map((collab, idx) => (
+                        <div
+                          key={idx}
+                          className="w-7 h-7 rounded-full bg-gradient-to-r from-green-600 to-blue-600 border-2 border-gray-900 flex items-center justify-center text-white text-xs font-bold"
+                          title={collab.email || 'Collaborator'}
+                        >
+                          {collab.email?.[0]?.toUpperCase() || '?'}
+                        </div>
+                      ))}
+                      {project.collaborators.length > 3 && (
+                        <div className="w-7 h-7 rounded-full bg-gray-700 border-2 border-gray-900 flex items-center justify-center text-gray-300 text-xs font-bold">
+                          +{project.collaborators.length - 3}
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-gray-400">{project.collaborators.length} collaborator{project.collaborators.length !== 1 ? 's' : ''}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-xs bg-gradient-to-r from-blue-600 to-purple-600 text-white px-3 py-1.5 rounded-lg font-medium">
+                    {project.language}
+                  </span>
+                  <div className="flex items-center gap-1 text-xs text-gray-500">
                     <Clock size={14} />
                     <span>Recent</span>
                   </div>
@@ -321,6 +356,13 @@ export default function Dashboard() {
             setSelectedProjectId(null);
             fetchProjects(); // Refresh projects
           }}
+        />
+
+        {/* Logout Confirmation Modal */}
+        <LogoutConfirmModal
+          isOpen={showLogoutModal}
+          onConfirm={confirmLogout}
+          onCancel={() => setShowLogoutModal(false)}
         />
       </div>
     </div>

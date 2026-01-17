@@ -3,6 +3,7 @@ const router = express.Router();
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const Project = require('../models/Project');
+const User = require('../models/User');
 
 // Middleware to verify JWT
 const verifyToken = (req, res, next) => {
@@ -23,11 +24,12 @@ const verifyToken = (req, res, next) => {
 // Get GitHub authorization URL
 router.get('/auth-url', (req, res) => {
   const clientId = process.env.GITHUB_CLIENT_ID;
+  const redirectUri = process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/github/callback';
   if (!clientId) {
     return res.status(400).json({ error: 'GitHub OAuth not configured' });
   }
 
-  const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&scope=repo,user`;
+  const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo,user`;
   res.json({ authUrl });
 });
 
@@ -46,6 +48,23 @@ router.post('/callback', async (req, res) => {
       { headers: { Accept: 'application/json' } }
     );
 
+    const { access_token } = tokenResponse.data || {};
+
+    // If caller is authenticated, persist token to their user record
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader && access_token) {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_secret_key');
+        const userId = decoded.userId;
+        await User.findByIdAndUpdate(userId, {
+          $set: { githubAccessToken: access_token, updatedAt: new Date() }
+        });
+      }
+    } catch (persistErr) {
+      console.warn('[GitHub] Could not persist access token to user:', persistErr.message);
+    }
+
     res.json(tokenResponse.data);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -55,7 +74,7 @@ router.post('/callback', async (req, res) => {
 // Export project to GitHub
 router.post('/export/:projectId', verifyToken, async (req, res) => {
   try {
-    const { githubToken, repositoryName } = req.body;
+    const { repositoryName } = req.body;
     const project = await Project.findById(req.params.projectId);
 
     if (!project) {
@@ -64,6 +83,22 @@ router.post('/export/:projectId', verifyToken, async (req, res) => {
 
     if (project.owner.toString() !== req.userId) {
       return res.status(403).json({ error: 'Not authorized to export this project' });
+    }
+
+    // Resolve user's GitHub token server-side
+    const user = await User.findById(req.userId).lean();
+    const githubToken = user?.githubAccessToken;
+    if (!githubToken) {
+      const clientId = process.env.GITHUB_CLIENT_ID;
+      const redirectUri = process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/github/callback';
+      const authUrl = clientId
+        ? `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo,user`
+        : null;
+      return res.status(428).json({
+        error: 'GitHub not linked',
+        needsAuth: true,
+        authUrl
+      });
     }
 
     // Create repository

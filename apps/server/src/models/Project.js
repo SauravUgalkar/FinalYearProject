@@ -78,6 +78,14 @@ const projectSchema = new mongoose.Schema({
       lastActivity: { type: Date, default: Date.now }
     }
   ],
+  chatHistory: [
+    {
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      userName: String,
+      message: String,
+      timestamp: { type: Date, default: Date.now }
+    }
+  ],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

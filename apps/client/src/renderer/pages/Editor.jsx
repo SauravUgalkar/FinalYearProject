@@ -12,6 +12,7 @@ import ExportModal from '../components/ExportModal';
 import GitControl from '../components/GitControl';
 import Settings from '../components/Settings';
 import Recordings from '../components/Recordings';
+import UserBadge from '../components/UserBadge';
 import { Play, Share2, Download, FileText, MessageCircle, BarChart3, FileDown, Home, Settings as SettingsIcon, GitBranch, ArrowLeft, Circle, Square, Video } from 'lucide-react';
 
 export default function EditorPage() {
@@ -26,6 +27,7 @@ export default function EditorPage() {
   const [projectName, setProjectName] = useState('Untitled Project');
   const [projectOwnerId, setProjectOwnerId] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStartTime, setRecordingStartTime] = useState(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -37,6 +39,7 @@ export default function EditorPage() {
     executionTimes: []
   });
   const [allUsersAnalytics, setAllUsersAnalytics] = useState([]);
+  const [activityFeed, setActivityFeed] = useState([]);
   const [isExecuting, setIsExecuting] = useState(false);
   const [waitingForInput, setWaitingForInput] = useState(false);
   const [editorInstance, setEditorInstance] = useState(null);
@@ -49,11 +52,20 @@ export default function EditorPage() {
   const [yjsSyncActive, setYjsSyncActive] = useState(false);
   const [yjsSyncMessage, setYjsSyncMessage] = useState('Syncing...');
   const yjsSyncTimer = useRef(null);
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const [collaborators, setCollaborators] = useState([]);
   
   // Yjs state
   const yDocs = useRef(new Map()); // Map of fileName -> Yjs Doc
   const yTexts = useRef(new Map()); // Map of fileName -> Y.Text
   const isRemoteChange = useRef(false); // Flag to distinguish local vs remote changes
+  const yjsSyncTimeout = useRef(null); // Debounce timer for Yjs sync
+  const editorValueRef = useRef(''); // Track editor value to prevent unnecessary updates
+  const isTyping = useRef(false); // Track if user is actively typing
+  const typingTimeout = useRef(null); // Timer to detect when typing stops
+  const pendingRemoteUpdate = useRef(null); // Queue remote updates during typing
+  const monacoEditorRef = useRef(null); // Store Monaco editor instance
+  const isApplyingRemoteChange = useRef(false); // Prevent onChange during remote updates
 
   // Load project files with fallback to localStorage
   useEffect(() => {
@@ -62,6 +74,7 @@ export default function EditorPage() {
         const token = localStorage.getItem('token');
         const user = JSON.parse(localStorage.getItem('user') || '{}');
         setCurrentUserId(user.id);
+        setCurrentUser(user);
         
         const response = await axios.get(
           `http://localhost:5000/api/projects/${projectId}`,
@@ -217,37 +230,45 @@ export default function EditorPage() {
     });
   }, [socket, projectId]);
 
-  // Sync local changes to Yjs and broadcast
+  // Sync local changes to Yjs and broadcast (debounced)
   const syncYjsChange = useCallback((fileName, content) => {
     if (!socket || !projectId) return;
 
-    const ytext = yTexts.current.get(fileName);
-    if (!ytext) return;
-
-    // Get current Yjs content
-    const yjsContent = ytext.toString();
-    
-    // Only sync if content differs
-    if (yjsContent !== content) {
-      // Update Yjs document
-      isRemoteChange.current = true;
-      ytext.delete(0, ytext.length);
-      ytext.insert(0, content);
-      isRemoteChange.current = false;
-
-      // Get binary update
-      const update = Y.encodeStateAsUpdate(yDocs.current.get(fileName));
-      
-      // Show sync notification
-      showYjsSyncNotification('📤 Syncing edits...');
-      
-      // Broadcast update
-      socket.emit('yjs-sync', {
-        roomId: projectId,
-        fileName,
-        update: Array.from(update)
-      });
+    // Clear existing timeout
+    if (yjsSyncTimeout.current) {
+      clearTimeout(yjsSyncTimeout.current);
     }
+
+    // Debounce: sync after 300ms of no typing
+    yjsSyncTimeout.current = setTimeout(() => {
+      const ytext = yTexts.current.get(fileName);
+      if (!ytext) return;
+
+      // Get current Yjs content
+      const yjsContent = ytext.toString();
+      
+      // Only sync if content differs
+      if (yjsContent !== content) {
+        // Update Yjs document
+        isRemoteChange.current = true;
+        ytext.delete(0, ytext.length);
+        ytext.insert(0, content);
+        isRemoteChange.current = false;
+
+        // Get binary update
+        const update = Y.encodeStateAsUpdate(yDocs.current.get(fileName));
+        
+        // Show sync notification
+        showYjsSyncNotification('📤 Syncing edits...');
+        
+        // Broadcast update
+        socket.emit('yjs-sync', {
+          roomId: projectId,
+          fileName,
+          update: Array.from(update)
+        });
+      }
+    }, 300);
   }, [socket, projectId, showYjsSyncNotification]);
 
   // Track line modification
@@ -350,11 +371,18 @@ export default function EditorPage() {
       // Re-join on reconnect
       socket.on('connect', joinRoom);
 
+      // Listen for room users updates
+      socket.on('room-users', (users) => {
+        console.log('Room users updated:', users);
+        setOnlineUsers(users);
+      });
+
       return () => {
         socket.off('connect', joinRoom);
+        socket.off('room-users');
       };
     }
-  }, [socket, projectId]);
+  }, [socket, projectId, navigate]);
 
   const saveProject = async (updatedFiles) => {
     // Always save to localStorage first
@@ -447,19 +475,81 @@ export default function EditorPage() {
     console.log(`File "${file.name}" saved successfully`);
   }, [files]);
 
+  // Apply remote updates directly to Monaco editor without triggering onChange
+  const applyRemoteUpdate = useCallback((newContent) => {
+    if (monacoEditorRef.current && currentFile) {
+      const editor = monacoEditorRef.current;
+      const model = editor.getModel();
+      
+      if (model) {
+        // Set flag to prevent onChange from processing this change
+        isApplyingRemoteChange.current = true;
+        
+        // Update Monaco model directly
+        model.setValue(newContent);
+        
+        // Update state without triggering sync
+        setCurrentFile(prev => ({ ...prev, content: newContent }));
+        setFiles(prevFiles => 
+          prevFiles.map(f => f.name === currentFile.name ? { ...f, content: newContent } : f)
+        );
+        
+        // Reset flag after a short delay
+        setTimeout(() => {
+          isApplyingRemoteChange.current = false;
+        }, 100);
+      }
+    } else {
+      // Fallback if editor not available
+      setCurrentFile(prev => ({ ...prev, content: newContent }));
+      setFiles(prevFiles => 
+        prevFiles.map(f => f.name === currentFile?.name ? { ...f, content: newContent } : f)
+      );
+    }
+  }, [currentFile]);
+
   const handleCodeChange = useCallback((value) => {
-    if (!currentFile || !socket || !projectId) return;
+    if (!currentFile) return;
+    
+    // Ignore if this change is from a remote update
+    if (isApplyingRemoteChange.current) {
+      return;
+    }
+
+    // Mark user as actively typing
+    isTyping.current = true;
+    
+    // Clear and reset typing timeout
+    if (typingTimeout.current) {
+      clearTimeout(typingTimeout.current);
+    }
+    
+    // Mark typing as stopped after 500ms of no changes
+    typingTimeout.current = setTimeout(() => {
+      isTyping.current = false;
+      
+      // Apply any pending remote updates
+      if (pendingRemoteUpdate.current && pendingRemoteUpdate.current.fileName === currentFile.name) {
+        const { content } = pendingRemoteUpdate.current;
+        applyRemoteUpdate(content);
+        pendingRemoteUpdate.current = null;
+      }
+    }, 500);
+
+    // Store in ref immediately for smooth typing
+    editorValueRef.current = value;
 
     // Update local state
-    const updatedFiles = files.map(f => 
-      (f.name === currentFile.name) ? { ...f, content: value } : f
+    setCurrentFile(prev => ({ ...prev, content: value }));
+    setFiles(prevFiles => 
+      prevFiles.map(f => (f.name === currentFile.name) ? { ...f, content: value } : f)
     );
-    setFiles(updatedFiles);
-    setCurrentFile({ ...currentFile, content: value });
     
-    // Sync with Yjs
-    syncYjsChange(currentFile.name, value);
-  }, [currentFile, socket, projectId, files, syncYjsChange]);
+    // Sync with Yjs (debounced)
+    if (socket && projectId) {
+      syncYjsChange(currentFile.name, value);
+    }
+  }, [currentFile, socket, projectId, syncYjsChange]);
 
   // Handle: Check if code likely requires input
   const codeRequiresInput = (code, language) => {
@@ -573,58 +663,55 @@ export default function EditorPage() {
     };
   }, [socket]);
 
+  // Listen for team execution activity to keep owner analytics fresh
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleExecutionActivity = (data) => {
+      setActivityFeed((prev) => [
+        { ...data, timestamp: new Date().toISOString() },
+        ...prev
+      ].slice(0, 30));
+
+      // If current user is the owner, refresh analytics so they can see collaborator runs
+      if (projectOwnerId === currentUserId) {
+        fetchAllAnalytics();
+      }
+    };
+
+    socket.on('execution-activity', handleExecutionActivity);
+    return () => socket.off('execution-activity', handleExecutionActivity);
+  }, [socket, projectOwnerId, currentUserId, fetchAllAnalytics]);
+
   // Listen for real-time code changes from collaborators
   React.useEffect(() => {
     if (!socket || !projectId) return;
 
+    // Handle new file creation from other users
     const handleCodeChanged = (data) => {
-      console.log('[Real-time] Code changed from collaborator:', {
-        fileId: data.fileId,
-        modifiedBy: data.modifiedBy,
-        isNewFile: data.isNewFile
-      });
-
-      setFiles(prevFiles => {
-        // Check if this is a new file
-        if (data.isNewFile) {
-          // Add new file if it doesn't exist
-          const fileExists = prevFiles.some(f => f.id === data.fileId);
+      // Only handle new file creation (Yjs handles all content sync)
+      if (data.isNewFile) {
+        console.log('[Real-time] New file created by collaborator:', data.fileName);
+        
+        setFiles(prevFiles => {
+          const fileExists = prevFiles.some(f => f.id === data.fileId || f.name === data.fileName);
           if (!fileExists) {
-            return [...prevFiles, {
+            const newFile = {
               id: data.fileId,
               name: data.fileName || 'Untitled',
               content: data.content || '',
               language: data.language || 'javascript'
-            }];
+            };
+            
+            // Initialize Yjs for the new file
+            initializeYjsFile(newFile.name, newFile.content);
+            requestYjsState(newFile.name);
+            
+            return [...prevFiles, newFile];
           }
           return prevFiles;
-        } else {
-          // Update existing file content
-          return prevFiles.map(f => {
-            if (f.id === data.fileId || f.name === data.fileId) {
-              return {
-                ...f,
-                content: data.content
-              };
-            }
-            return f;
-          });
-        }
-      });
-
-      // Update current file if it's the one being edited
-      setCurrentFile(prev => {
-        if (prev && (prev.id === data.fileId || prev.name === data.fileId)) {
-          // Only update if we're not the one who made the change
-          if (data.modifiedBy !== JSON.parse(localStorage.getItem('user') || '{}').name) {
-            return {
-              ...prev,
-              content: data.content || prev.content
-            };
-          }
-        }
-        return prev;
-      });
+        });
+      }
     };
 
     socket.on('code-changed', handleCodeChanged);
@@ -643,19 +730,7 @@ export default function EditorPage() {
         yDocs.current.set(fileName, ydoc);
         yTexts.current.set(fileName, ytext);
         
-        // Listen for changes from other users
-        ytext.observe(event => {
-          if (!isRemoteChange.current) {
-            // Update file content from remote changes
-            const newContent = ytext.toString();
-            setFiles(prevFiles =>
-              prevFiles.map(f => f.name === fileName ? { ...f, content: newContent } : f)
-            );
-            if (currentFile?.name === fileName) {
-              setCurrentFile(prev => ({ ...prev, content: newContent }));
-            }
-          }
-        });
+          console.log('[Yjs] Initialized Yjs document for:', fileName, 'Content:', ytext.toString());
       }
     };
 
@@ -668,18 +743,31 @@ export default function EditorPage() {
       showYjsSyncNotification('📥 Received changes...');
       
       if (yDocs.current.has(fileName)) {
+        // Mark as remote change to avoid triggering observer
         isRemoteChange.current = true;
         Y.applyUpdate(yDocs.current.get(fileName), new Uint8Array(update));
         isRemoteChange.current = false;
         
-        // Update editor content
+        // Get updated content from Yjs
         const ytext = yTexts.current.get(fileName);
         const newContent = ytext.toString();
-        setFiles(prevFiles =>
-          prevFiles.map(f => f.name === fileName ? { ...f, content: newContent } : f)
-        );
+        console.log('[Yjs] Applying remote update - new content length:', newContent.length);
+        
+        // If user is typing on this file, queue the update instead
+        if (isTyping.current && currentFile?.name === fileName) {
+          console.log('[Yjs] User is typing, queuing remote update');
+          pendingRemoteUpdate.current = { fileName, content: newContent };
+          return;
+        }
+        
+        // Apply remote update using Monaco API if this is the current file
         if (currentFile?.name === fileName) {
-          setCurrentFile(prev => ({ ...prev, content: newContent }));
+          applyRemoteUpdate(newContent);
+        } else {
+          // Update files state for non-active files
+          setFiles(prevFiles =>
+            prevFiles.map(f => f.name === fileName ? { ...f, content: newContent } : f)
+          );
         }
       }
     };
@@ -708,6 +796,7 @@ export default function EditorPage() {
       }, 5000);
     };
 
+    socket.on('code-changed', handleCodeChanged);
     socket.on('edit-conflict', handleConflict);
 
     return () => {
@@ -716,7 +805,7 @@ export default function EditorPage() {
       socket.off('yjs-state', handleYjsState);
       socket.off('yjs-sync', handleYjsSync);
     };
-  }, [socket, currentFile, syncYjsChange]);
+  }, [socket, currentFile, syncYjsChange, initializeYjsFile, requestYjsState]);
 
   // File deletion handler
   useEffect(() => {
@@ -742,7 +831,6 @@ export default function EditorPage() {
     socket.on('file-deleted-remote', handleFileDeleted);
 
     return () => {
-      socket.off('code-changed');
       socket.off('file-deleted-remote');
     };
   }, [socket, projectId]);
@@ -1007,12 +1095,12 @@ export default function EditorPage() {
             )}
             {sidebarTab === 'chat' && (
               <div className="flex-1 overflow-auto">
-                <Chat roomId={projectId} />
+                <Chat roomId={projectId} onlineUsers={onlineUsers} />
               </div>
             )}
             {sidebarTab === 'analytics' && (
               <div className="flex-1 overflow-auto p-4">
-                <Analytics data={analytics} allUsersData={allUsersAnalytics} />
+                <Analytics data={analytics} allUsersData={allUsersAnalytics} activityFeed={activityFeed} />
               </div>
             )}
             {sidebarTab === 'export' && (
@@ -1046,12 +1134,39 @@ export default function EditorPage() {
         <div className="flex-1 flex flex-col bg-gray-950">
           {/* Top Bar with Project Info */}
           <div className="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-bold text-white">{projectName}</h1>
-              <p className="text-xs text-gray-400 mt-1">
-                {currentFile ? `Editing: ${currentFile.name}` : 'No file selected'}
-              </p>
+            <div className="flex items-center gap-4">
+              <div>
+                <h1 className="text-xl font-bold text-white">{projectName}</h1>
+                <p className="text-xs text-gray-400 mt-1">
+                  {currentFile ? `Editing: ${currentFile.name}` : 'No file selected'}
+                </p>
+              </div>
+              {/* Current User Badge */}
+              <UserBadge user={currentUser} />
             </div>
+            
+            {/* Online Collaborators */}
+            {onlineUsers.length > 0 && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg">
+                <div className="flex -space-x-2">
+                  {onlineUsers.slice(0, 4).map((u, idx) => (
+                    <div
+                      key={idx}
+                      className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 border-2 border-gray-900 flex items-center justify-center text-white text-xs font-bold"
+                      title={u.userName}
+                    >
+                      {u.userName?.[0]?.toUpperCase() || '?'}
+                    </div>
+                  ))}
+                  {onlineUsers.length > 4 && (
+                    <div className="w-8 h-8 rounded-full bg-gray-700 border-2 border-gray-900 flex items-center justify-center text-gray-300 text-xs font-bold">
+                      +{onlineUsers.length - 4}
+                    </div>
+                  )}
+                </div>
+                <span className="text-xs text-gray-400">{onlineUsers.length} online</span>
+              </div>
+            )}
             
             <div className="flex items-center gap-3">
               {/* Recording Indicator */}
@@ -1129,13 +1244,15 @@ export default function EditorPage() {
             <div className="h-full rounded-lg border border-gray-800 overflow-hidden shadow-xl">
               {currentFile ? (
                 <Editor
+                  key={currentFile.name}
                   height="100%"
                   language={currentFile.language}
-                  value={currentFile.content}
+                  defaultValue={currentFile.content}
                   onChange={handleCodeChange}
                   onMount={(editor, monaco) => {
                     setEditorInstance(editor);
                     setMonacoInstance(monaco);
+                    monacoEditorRef.current = editor; // Store editor ref for remote updates
                     
                     // Track changes for blame
                     editor.onDidChangeModelContent((e) => {
