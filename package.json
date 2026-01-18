@@ -1,7 +1,7 @@
 {
-  "name": "collab-code-desktop",
+  "name": "collab-code-web",
   "version": "1.0.0",
-  "description": "Desktop-based collaborative coding and student performance tracking platform",
+  "description": "Web-based collaborative coding and student performance tracking platform",
   "private": true,
   "workspaces": [
     "apps/client",
@@ -9,26 +9,25 @@
     "apps/worker"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\"",
-    "dev:web": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\"",
-    "dev:electron": "concurrently \"npm run dev --workspace=apps/server\" \"npm run react-start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\" \"wait-on http://localhost:3000 && npm run electron-start --workspace=apps/client\"",
-    "dev:old": "npm run dev --workspaces",
+    "dev": "concurrently \"npm run dev --workspace=apps/server\" \"npm start --workspace=apps/client\"",
+    "dev:all": "concurrently \"npm run dev --workspace=apps/server\" \"npm start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\"",
     "build": "npm run build --workspaces",
     "start": "npm start --workspace=apps/server",
-    "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down",
-    "docker:logs": "docker-compose logs -f"
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:build": "docker compose build"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2",
-    "wait-on": "^7.0.1"
+    "concurrently": "^8.2.2"
   },
   "keywords": [
     "collaborative",
     "coding",
     "education",
     "real-time",
-    "desktop"
+    "web",
+    "react"
   ],
   "author": "Your Name",
   "license": "MIT"

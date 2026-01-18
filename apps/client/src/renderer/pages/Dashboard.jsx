@@ -35,8 +35,10 @@ export default function Dashboard() {
     localStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
-    // Navigate to login page
-    navigate('/login', { replace: true });
+    // Navigate to login page with a small delay to ensure localStorage is cleared
+    setTimeout(() => {
+      navigate('/login', { replace: true });
+    }, 100);
   };
 
   useEffect(() => {

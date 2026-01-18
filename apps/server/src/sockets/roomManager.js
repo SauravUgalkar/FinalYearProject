@@ -1,4 +1,3 @@
-const Room = require('../models/Room');
 const Project = require('../models/Project');
 
 class RoomManager {
@@ -35,10 +34,24 @@ class RoomManager {
       }
 
       const room = this.activeRooms.get(roomId);
+      const project = await Project.findById(roomId).lean();
+
+      // Resolve role for this user
+      let role = 'viewer';
+      if (project) {
+        if (project.owner?.toString() === userId) {
+          role = 'admin';
+        } else {
+          const collaborator = (project.collaborators || []).find(
+            (c) => c.userId?.toString() === userId
+          );
+          role = collaborator?.role || 'viewer';
+        }
+      }
       
       // Add user to socket room
       socket.join(roomId);
-      room.users.set(socket.id, { userId, userName, cursorPosition: { line: 0, column: 0 } });
+      room.users.set(socket.id, { userId, userName, role, cursorPosition: { line: 0, column: 0 } });
       this.userRoomMap.set(socket.id, roomId);
 
       // Initialize line edits tracking if not exists (for conflict detection)
@@ -50,6 +63,7 @@ class RoomManager {
       socket.to(roomId).emit('user-joined', {
         userId,
         userName,
+        role,
         socketId: socket.id,
         activeUsers: Array.from(room.users.values())
       });
@@ -83,6 +97,11 @@ class RoomManager {
 
     const { fileId, content, language, changedLines } = data;
     const user = room.users.get(socket.id);
+
+    if (user?.role === 'viewer') {
+      socket.emit('permission-denied', { action: 'edit', message: 'View-only users cannot edit code' });
+      return;
+    }
 
     // Initialize line edits tracking
     if (!room.lineEdits) {
@@ -317,6 +336,11 @@ class RoomManager {
     
     const user = room.users.get(socket.id);
 
+    if (user?.role === 'viewer') {
+      socket.emit('execution-error', { error: 'View-only users cannot execute code' });
+      return;
+    }
+
     try {
       console.log(`[RoomManager] Code execution requested in room ${roomId} by ${user.userName}`);
       
@@ -370,6 +394,11 @@ class RoomManager {
 
     const { fileId } = data;
     const user = room.users.get(socket.id);
+
+    if (user?.role === 'viewer') {
+      socket.emit('error', { message: 'View-only users cannot delete files' });
+      return;
+    }
 
     // Remove file from code state
     if (room.codeState.files) {
@@ -462,6 +491,15 @@ class RoomManager {
     } catch (error) {
       console.warn('Warning: Could not save room state to Redis:', error.message);
     }
+  }
+
+  getUserRole(socketId) {
+    const roomId = this.userRoomMap.get(socketId);
+    if (!roomId) return null;
+    const room = this.activeRooms.get(roomId);
+    if (!room) return null;
+    const user = room.users.get(socketId);
+    return user?.role || null;
   }
 }
 

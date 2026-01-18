@@ -28,6 +28,7 @@ export default function EditorPage() {
   const [projectOwnerId, setProjectOwnerId] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
+  const [userRole, setUserRole] = useState('viewer');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingStartTime, setRecordingStartTime] = useState(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -85,6 +86,18 @@ export default function EditorPage() {
         console.log('Project loaded from server:', response.data);
         setProjectName(response.data.name || 'Untitled Project');
         setProjectOwnerId(response.data.owner);
+        setCollaborators(response.data.collaborators || []);
+        // Determine current user's role (admin if owner)
+        let role = 'viewer';
+        if (response.data.owner === user.id) {
+          role = 'admin';
+        } else {
+          const collab = (response.data.collaborators || []).find(c => {
+            return (c.userId && c.userId.toString() === user.id) || c.userId === user.id;
+          });
+          role = collab?.role || 'viewer';
+        }
+        setUserRole(role);
         setFiles(response.data.files || []);
         if (response.data.files && response.data.files.length > 0) {
           setCurrentFile(response.data.files[0]);
@@ -163,10 +176,18 @@ export default function EditorPage() {
     return () => clearInterval(interval);
   }, [analytics, syncAnalytics]);
 
-  // Fetch all analytics when viewing analytics tab
+  // Fetch all analytics when viewing analytics tab and set up polling
   useEffect(() => {
     if (sidebarTab === 'analytics' && projectOwnerId === currentUserId) {
+      // Fetch immediately when tab is opened
       fetchAllAnalytics();
+      
+      // Set up polling every 5 seconds while on analytics tab
+      const interval = setInterval(() => {
+        fetchAllAnalytics();
+      }, 5000);
+      
+      return () => clearInterval(interval);
     }
   }, [sidebarTab, projectOwnerId, currentUserId, fetchAllAnalytics]);
 
@@ -242,21 +263,45 @@ export default function EditorPage() {
     // Debounce: sync after 300ms of no typing
     yjsSyncTimeout.current = setTimeout(() => {
       const ytext = yTexts.current.get(fileName);
-      if (!ytext) return;
+      const ydoc = yDocs.current.get(fileName);
+      if (!ytext || !ydoc) return;
 
       // Get current Yjs content
       const yjsContent = ytext.toString();
       
       // Only sync if content differs
       if (yjsContent !== content) {
-        // Update Yjs document
+        console.log(`[Client] Content differs - Yjs: ${yjsContent.length} chars, Local: ${content.length} chars`);
+        
+        // Calculate diff and apply only the differences (not replace all)
+        let deleteLength = 0;
+        let insertStart = 0;
+        let insertText = '';
+        
+        // Find first difference
+        let i = 0;
+        while (i < yjsContent.length && i < content.length && yjsContent[i] === content[i]) {
+          i++;
+        }
+        insertStart = i;
+        deleteLength = yjsContent.length - i;
+        insertText = content.substring(i);
+        
+        console.log(`[Client] Diff: delete ${deleteLength} chars at ${insertStart}, insert "${insertText}"`);
+        
+        // Mark as local change so remote update handling knows not to re-sync
         isRemoteChange.current = true;
-        ytext.delete(0, ytext.length);
-        ytext.insert(0, content);
+        
+        // Apply only the delta
+        ytext.delete(insertStart, deleteLength);
+        ytext.insert(insertStart, insertText);
+        
         isRemoteChange.current = false;
 
-        // Get binary update
-        const update = Y.encodeStateAsUpdate(yDocs.current.get(fileName));
+        // Get binary update from the delta only
+        const update = Y.encodeStateAsUpdate(ydoc);
+        
+        console.log(`[Client] Encoded update size: ${update.length} bytes`);
         
         // Show sync notification
         showYjsSyncNotification('📤 Syncing edits...');
@@ -509,6 +554,7 @@ export default function EditorPage() {
   }, [currentFile]);
 
   const handleCodeChange = useCallback((value) => {
+    if (userRole === 'viewer') return;
     if (!currentFile) return;
     
     // Ignore if this change is from a remote update
@@ -549,18 +595,19 @@ export default function EditorPage() {
     if (socket && projectId) {
       syncYjsChange(currentFile.name, value);
     }
-  }, [currentFile, socket, projectId, syncYjsChange]);
+  }, [currentFile, socket, projectId, syncYjsChange, userRole]);
 
   // Handle: Check if code likely requires input
   const codeRequiresInput = (code, language) => {
     if (!code) return false;
     const lower = code.toLowerCase();
     const inputPatterns = {
-      python: ['input(', 'raw_input(', 'sys.stdin'],
-      javascript: ['readline', 'process.stdin', 'prompt('],
-      java: ['Scanner', 'readLine', 'BufferedReader'],
-      cpp: ['cin', 'getline', 'scanf'],
-      c: ['scanf', 'getline', 'fgets']
+      python: ['input(', 'raw_input(', 'sys.stdin', 'input'],
+      javascript: ['readline', 'process.stdin', 'prompt(', 'require("readline")'],
+      java: ['scanner', 'readline', 'bufferedreader', 'system.in'],
+      cpp: ['cin', 'getline', 'scanf', 'std::cin'],
+      c: ['scanf', 'getline', 'fgets', 'gets'],
+      csharp: ['console.readline', 'readkey', 'readinput', 'system.io']
     };
     
     const patterns = inputPatterns[language?.toLowerCase()] || [];
@@ -578,6 +625,10 @@ export default function EditorPage() {
     }
     if (!projectId) {
       alert('No project loaded');
+      return;
+    }
+    if (userRole === 'viewer') {
+      setExecutionOutput('View-only role cannot execute code.');
       return;
     }
 
@@ -610,7 +661,7 @@ export default function EditorPage() {
       language: currentFile.language || 'javascript',
       input: executionInput
     });
-  }, [currentFile, socket, projectId, executionInput]);
+  }, [currentFile, socket, projectId, executionInput, userRole]);
 
   // Listen for execution results
   React.useEffect(() => {
@@ -1206,7 +1257,12 @@ export default function EditorPage() {
               {/* Run Button */}
               <button
                 onClick={handleExecuteCode}
-                className="flex items-center gap-2 px-6 py-2 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white rounded-lg font-medium transition-all shadow-lg hover:shadow-xl transform hover:scale-105"
+                disabled={userRole === 'viewer' || isExecuting}
+                className={`flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-all shadow-lg transform ${
+                  userRole === 'viewer'
+                    ? 'bg-gray-700 text-gray-300 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white hover:shadow-xl hover:scale-105'
+                }`}
               >
                 <Play size={18} /> Run
               </button>
@@ -1286,7 +1342,8 @@ export default function EditorPage() {
                     scrollBeyondLastLine: false,
                     smoothScrolling: true,
                     glyphMargin: true,
-                    lineDecorationsWidth: 10
+                    lineDecorationsWidth: 10,
+                    readOnly: userRole === 'viewer'
                   }}
                 />
               ) : (
@@ -1325,19 +1382,37 @@ export default function EditorPage() {
               {waitingForInput && (
                 <div className="border-t border-gray-800 pt-2">
                   <label className="text-xs font-semibold text-blue-400 block mb-1">stdin (awaiting input):</label>
-                  <textarea
-                    autoFocus
-                    value={executionInput}
-                    onChange={(e) => setExecutionInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      // Allow Ctrl+Enter or Cmd+Enter to submit input
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                        handleExecuteCode();
-                      }
-                    }}
-                    placeholder="$ Enter your input here... (Ctrl+Enter to submit)"
-                    className="w-full h-12 text-white border rounded px-2 py-1 text-xs font-mono bg-blue-950 border-blue-600 focus:border-blue-400 focus:ring-2 focus:ring-blue-900 focus:outline-none transition-colors resize-none"
-                  />
+                  <div className="flex gap-2">
+                    <textarea
+                      autoFocus
+                      value={executionInput}
+                      onChange={(e) => setExecutionInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        // Auto-submit on Enter key or Ctrl+Enter
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleExecuteCode();
+                        } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault();
+                          handleExecuteCode();
+                        }
+                      }}
+                      placeholder="$ Enter your input here... (Press Enter to execute)"
+                      className="flex-1 h-12 text-white border rounded px-2 py-1 text-xs font-mono bg-blue-950 border-blue-600 focus:border-blue-400 focus:ring-2 focus:ring-blue-900 focus:outline-none transition-colors resize-none"
+                    />
+                    <button
+                      onClick={handleExecuteCode}
+                      disabled={isExecuting || userRole === 'viewer'}
+                      className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                        userRole === 'viewer'
+                          ? 'bg-gray-700 text-gray-300 cursor-not-allowed'
+                          : 'bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white'
+                      }`}
+                      title="Execute with input (or press Enter)"
+                    >
+                      ▶ Run
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

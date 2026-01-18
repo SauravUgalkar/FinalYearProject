@@ -35,10 +35,18 @@ if (!MONGODB_URI) {
 const app = express();
 const server = http.createServer(app);
 
+// Parse CORS origins from environment variable
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
+  : ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"];
+
+console.log("CORS Origins:", corsOrigins);
+
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://localhost:5000"],
+    origin: corsOrigins,
     credentials: true,
+    methods: ["GET", "POST"],
   },
 });
 
@@ -47,10 +55,15 @@ const io = new Server(server, {
 // -----------------------------------------------------------------------------
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    origin: corsOrigins,
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+// Explicitly handle preflight requests
+app.options("*", cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -161,6 +174,9 @@ queueEvents.on("completed", (job) => {
           error: returnvalue?.error || 'Execution failed',
           output: returnvalue?.output || ''
         });
+        
+        // Persist analytics as error
+        persistAnalyticsForJob(jobInfo, 'error', 0);
       } else {
         console.log(`[Queue] Emitting execution-result to socket ${socketId}`);
         io.to(socketId).emit('execution-result', {
@@ -169,7 +185,11 @@ queueEvents.on("completed", (job) => {
           executionTime: returnvalue?.executionTime || 0,
           status: 'success'
         });
+        
+        // Persist analytics as success
+        persistAnalyticsForJob(jobInfo, 'success', returnvalue?.executionTime || 0);
       }
+      
       // Broadcast to room so owners/collaborators can see others' runs
       io.to(roomId).emit('execution-activity', {
         jobId,
@@ -180,8 +200,6 @@ queueEvents.on("completed", (job) => {
         status: returnvalue?.status === 'error' ? 'error' : 'success',
       });
 
-      // Persist analytics for the user
-      persistAnalyticsForJob(jobInfo, 'success', returnvalue?.executionTime || 0);
       jobRoomMap.delete(jobId);
     } else {
       console.warn(`[Queue] No job info found for job ${jobId}`);
@@ -288,8 +306,13 @@ io.on("connection", (socket) => {
     if (!roomId || !fileName) return;
 
     try {
+      console.log(`[Yjs] Before apply - docId: ${roomId}:${fileName}, update length: ${update?.length}`);
+      
       // Apply the update to the shared document
       yjsProvider.applyUpdate(roomId, fileName, update);
+      
+      const currentContent = yjsProvider.getContent(roomId, fileName);
+      console.log(`[Yjs] After apply - content length: ${currentContent.length}, first 100 chars: ${currentContent.substring(0, 100)}`);
 
       // Persist latest content to MongoDB for durability
       try {
@@ -308,16 +331,15 @@ io.on("connection", (socket) => {
         console.error(`[Yjs] Failed to persist content for ${fileName}:`, persistErr.message);
       }
       
-      // Get updated state
-      const state = yjsProvider.getState(roomId, fileName);
-      
-      // Broadcast the update to all other clients in the room
+      // Broadcast ONLY the update to other clients (not the sender, not the full state)
+      // This prevents duplication - sender already has their changes applied locally
+      console.log(`[Yjs] Broadcasting update to room ${roomId}, excluding socket ${socket.id}`);
       socket.to(roomId).emit("yjs-sync", {
         fileName,
-        update: Array.from(state)
+        update: update  // Send the original update, not the full state
       });
       
-      console.log(`[Yjs] Applied, saved, and broadcast update for ${fileName} in room ${roomId}`);
+      console.log(`[Yjs] Broadcast complete for ${fileName} in room ${roomId}`);
     } catch (error) {
       console.error(`[Yjs] Error processing update:`, error);
     }
@@ -362,6 +384,11 @@ io.on("connection", (socket) => {
     console.log(`[Socket] cursor-move from socket ${socket.id}`);
     roomManager.handleCursorMove(socket, data);
   });
+      const role = roomManager.getUserRole(socket.id);
+      if (role === 'viewer') {
+        socket.emit('permission-denied', { action: 'edit', message: 'View-only users cannot edit code' });
+        return;
+      }
 
   socket.on("execute-code", (data) => {
     console.log(`[Socket] execute-code from socket ${socket.id}`);

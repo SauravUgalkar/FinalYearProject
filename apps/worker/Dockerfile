@@ -6,7 +6,11 @@ RUN apk add --no-cache \
     python3 \
     openjdk11 \
     bash \
-    curl
+    curl \
+    gcc \
+    g++ \
+    make \
+    musl-dev
 
 WORKDIR /app
 

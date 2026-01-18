@@ -2,10 +2,9 @@
 FROM node:18-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-# Use npm install to avoid lockfile requirement in container builds
 RUN npm install
 COPY . .
-RUN npm run react-build
+RUN npm run build
 
 # Run stage
 FROM node:18-alpine

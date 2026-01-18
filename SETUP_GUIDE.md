@@ -56,7 +56,7 @@ GITHUB_CLIENT_SECRET=your_github_oauth_secret
 
 ```bash
 # Start MongoDB and Redis containers
-npm run docker:up
+docker compose up -d mongodb redis
 
 # Verify services are running
 docker ps
@@ -72,15 +72,18 @@ docker ps
 
 ```bash
 # Terminal 1: Start backend server
-npm run dev --workspace=apps/server
+cd apps/server
+npm run dev
 
 # Terminal 2: Start frontend
-npm start --workspace=apps/client
+cd apps/client
+npm start
 ```
 
-#### Option 2: Concurrently
+#### Option 2: Using npm workspaces
 
 ```bash
+# Start both server and client
 npm run dev
 ```
 
@@ -88,7 +91,7 @@ npm run dev
 
 | Service | URL |
 |---------|-----|
-| React App | http://localhost:3000 |
+| Web Application | http://localhost:3000 |
 | Backend API | http://localhost:5000 |
 | MongoDB | localhost:27017 |
 | Redis | localhost:6379 |
