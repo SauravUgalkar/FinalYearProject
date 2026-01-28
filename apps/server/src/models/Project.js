@@ -4,6 +4,22 @@ const projectSchema = new mongoose.Schema({
   name: { type: String, required: true },
   description: String,
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  roomId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    default: function () {
+      return this._id ? this._id.toString() : undefined;
+    }
+  }, // Unique room identifier
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Admin who created the room
+  isInviteOnly: { type: Boolean, default: false }, // Require invitation to join
+  invitedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // Users invited by admin
+  activeUsers: [{ 
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userName: String,
+    joinedAt: { type: Date, default: Date.now }
+  }], // Currently connected users
   collaborators: [
     {
       userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -88,6 +104,14 @@ const projectSchema = new mongoose.Schema({
   ],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
+});
+
+// Ensure roomId is always populated to avoid unique null collisions
+projectSchema.pre('save', function(next) {
+  if (!this.roomId) {
+    this.roomId = this._id.toString();
+  }
+  next();
 });
 
 module.exports = mongoose.model('Project', projectSchema);

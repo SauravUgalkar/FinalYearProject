@@ -12,11 +12,9 @@ class RoomManager {
 
   async joinRoom(socket, roomId, userId, userName) {
     try {
-      // Track user in room; bootstrap codeState from DB on first join
       if (!this.activeRooms.has(roomId)) {
         const project = await Project.findById(roomId).lean();
         const filesFromDb = project?.files || [];
-
         this.activeRooms.set(roomId, {
           users: new Map(),
           codeState: {
@@ -36,30 +34,27 @@ class RoomManager {
       const room = this.activeRooms.get(roomId);
       const project = await Project.findById(roomId).lean();
 
-      // Resolve role for this user
       let role = 'viewer';
       if (project) {
         if (project.owner?.toString() === userId) {
           role = 'admin';
         } else {
-          const collaborator = (project.collaborators || []).find(
-            (c) => c.userId?.toString() === userId
-          );
+          const collaborator = (project.collaborators || []).find((c) => c.userId?.toString() === userId);
           role = collaborator?.role || 'viewer';
         }
       }
+      
+      console.log(`[RoomManager] User ${userName} assigned role: ${role} in room ${roomId}`);
       
       // Add user to socket room
       socket.join(roomId);
       room.users.set(socket.id, { userId, userName, role, cursorPosition: { line: 0, column: 0 } });
       this.userRoomMap.set(socket.id, roomId);
 
-      // Initialize line edits tracking if not exists (for conflict detection)
       if (!room.lineEdits) {
-        room.lineEdits = {}; // { 'fileId': { 'lineNumber': [{ userId, socketId, userName, timestamp }] } }
+        room.lineEdits = {};
       }
 
-      // Notify others
       socket.to(roomId).emit('user-joined', {
         userId,
         userName,
@@ -68,19 +63,14 @@ class RoomManager {
         activeUsers: Array.from(room.users.values())
       });
 
-      // Send current room state to joining user
       socket.emit('room-state', {
         roomId,
         codeState: room.codeState,
         activeUsers: Array.from(room.users.values())
       });
 
-      // Broadcast updated user list to entire room
       this.io.to(roomId).emit('room-users', Array.from(room.users.values()));
-
-      // Save to database
       await this.saveRoomState(roomId, room);
-
       console.log(`User ${userName} joined room ${roomId}`);
     } catch (error) {
       console.error('Error joining room:', error);
@@ -329,20 +319,33 @@ class RoomManager {
 
   async handleCodeExecution(socket, data) {
     const roomId = this.userRoomMap.get(socket.id);
-    if (!roomId) return;
+    if (!roomId) {
+      socket.emit('execution-error', { error: 'Room not found' });
+      return;
+    }
 
     const room = this.activeRooms.get(roomId);
-    if (!room) return;
+    if (!room) {
+      socket.emit('execution-error', { error: 'Active room not found' });
+      return;
+    }
     
     const user = room.users.get(socket.id);
+    
+    if (!user) {
+      socket.emit('execution-error', { error: 'User not found in room' });
+      return;
+    }
 
-    if (user?.role === 'viewer') {
+    console.log(`[RoomManager] User ${user.userName} (role: ${user.role}) attempting code execution in room ${roomId}`);
+
+    if (user.role === 'viewer') {
       socket.emit('execution-error', { error: 'View-only users cannot execute code' });
       return;
     }
 
     try {
-      console.log(`[RoomManager] Code execution requested in room ${roomId} by ${user.userName}`);
+      console.log(`[RoomManager] Code execution approved for ${user.userName} (role: ${user.role})`);
       
       // Add job to execution queue
       const job = await this.executionQueue.add('execute', {

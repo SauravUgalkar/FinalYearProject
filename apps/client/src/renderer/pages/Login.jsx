@@ -27,12 +27,12 @@ export default function Login() {
       });
       console.log('Login success:', response.data);
       
-      // Store token and user in localStorage
-      localStorage.setItem('token', response.data.token);
-      localStorage.setItem('user', JSON.stringify(response.data.user));
+      // Store token and user in sessionStorage (tab-isolated)
+      sessionStorage.setItem('token', response.data.token);
+      sessionStorage.setItem('user', JSON.stringify(response.data.user));
       
       console.log('Navigating to dashboard...');
-      // Navigate to dashboard (ProtectedRoute will check localStorage)
+      // Navigate to dashboard (ProtectedRoute will check sessionStorage)
       navigate('/dashboard', { replace: true });
     } catch (err) {
       console.error('Login error:', err);

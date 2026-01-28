@@ -1,24 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { X, UserPlus, Shield, Trash2, Crown, User as UserIcon, Mail } from 'lucide-react';
+import { X, Shield, Trash2, Crown, User as UserIcon } from 'lucide-react';
 import axios from 'axios';
 
 export default function Settings({ projectId, onClose }) {
   const [activeTab, setActiveTab] = useState('users'); // 'users' or 'general'
   const [projectUsers, setProjectUsers] = useState([]);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('viewer');
-  const [loading, setLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const user = JSON.parse(sessionStorage.getItem('user') || '{}');
     setCurrentUser(user);
     fetchProjectUsers();
   }, [projectId]);
 
   const fetchProjectUsers = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get(
         `http://localhost:5000/api/projects/${projectId}`,
         { headers: { Authorization: `Bearer ${token}` } }
@@ -44,35 +41,9 @@ export default function Settings({ projectId, onClose }) {
     }
   };
 
-  const handleInviteUser = async () => {
-    if (!inviteEmail.trim()) {
-      alert('Please enter an email address');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      await axios.post(
-        `http://localhost:5000/api/projects/${projectId}/share`,
-        { email: inviteEmail, role: inviteRole },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      
-      setInviteEmail('');
-      fetchProjectUsers();
-      alert('User invited successfully!');
-    } catch (error) {
-      console.error('Error inviting user:', error);
-      alert(error.response?.data?.error || 'Failed to invite user');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleChangeRole = async (userId, newRole) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/projects/${projectId}/share`,
         { 
@@ -94,7 +65,7 @@ export default function Settings({ projectId, onClose }) {
     if (!confirm('Remove this user from the project?')) return;
 
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       await axios.delete(
         `http://localhost:5000/api/projects/${projectId}/collaborators/${userId}`,
         { headers: { Authorization: `Bearer ${token}` } }
@@ -167,49 +138,6 @@ export default function Settings({ projectId, onClose }) {
       <div className="flex-1 overflow-auto p-6">
         {activeTab === 'users' && (
           <div className="space-y-6">
-            {/* Invite User Section */}
-            <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                <UserPlus size={16} className="text-blue-400" />
-                Invite User
-              </h3>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs text-gray-400 block mb-1">Email Address</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1 relative">
-                      <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-                      <input
-                        type="email"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        placeholder="user@example.com"
-                        className="w-full pl-10 pr-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs text-gray-400 block mb-1">Permission Level</label>
-                  <select
-                    value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value)}
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="viewer">Viewer - Can view only</option>
-                    <option value="editor">Editor - Can edit files</option>
-                  </select>
-                </div>
-                <button
-                  onClick={handleInviteUser}
-                  disabled={loading}
-                  className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-sm font-medium transition"
-                >
-                  {loading ? 'Inviting...' : 'Send Invitation'}
-                </button>
-              </div>
-            </div>
-
             {/* Current Users */}
             <div>
               <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">

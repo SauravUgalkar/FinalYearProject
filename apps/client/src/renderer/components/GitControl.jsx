@@ -21,7 +21,7 @@ export default function GitControl({ projectId }) {
   const fetchGitStatus = async () => {
     try {
       setFetching(true);
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get(`http://localhost:5000/api/git/${projectId}/status`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -46,7 +46,7 @@ export default function GitControl({ projectId }) {
 
   const handleStageFile = async (file) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/git/${projectId}/stage`,
         { files: [file] },
@@ -67,7 +67,7 @@ export default function GitControl({ projectId }) {
 
   const handleUnstageFile = async (file) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/git/${projectId}/unstage`,
         { files: [file] },
@@ -98,7 +98,7 @@ export default function GitControl({ projectId }) {
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/git/${projectId}/commit`,
         { message: commitMessage },
@@ -121,7 +121,7 @@ export default function GitControl({ projectId }) {
     if (allFiles.length === 0) return;
 
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/git/${projectId}/stage`,
         { files: allFiles },

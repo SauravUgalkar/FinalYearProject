@@ -24,7 +24,7 @@ const verifyToken = (req, res, next) => {
 router.post('/register', async (req, res, next) => {
   try {
     console.log('Register request body:', req.body);
-    const { name, email, password } = req.body;
+    const { name, email, password, codingLanguages } = req.body;
 
     // Validate input
     if (!email || !email.trim()) {
@@ -65,7 +65,8 @@ router.post('/register', async (req, res, next) => {
     const user = new User({
       name: name.trim(),
       email: trimmedEmail,
-      password: hashedPassword
+      password: hashedPassword,
+      codingLanguages: Array.isArray(codingLanguages) ? codingLanguages : []
     });
 
     // Save user to database
@@ -95,7 +96,12 @@ router.post('/register', async (req, res, next) => {
 
     console.log(`User registered successfully: ${trimmedEmail}`);
     res.status(201).json({
-      user: { id: savedUser._id, name: savedUser.name, email: savedUser.email },
+      user: {
+        id: savedUser._id,
+        name: savedUser.name,
+        email: savedUser.email,
+        codingLanguages: savedUser.codingLanguages || []
+      },
       token
     });
   } catch (err) {

@@ -13,6 +13,7 @@ import GitControl from '../components/GitControl';
 import Settings from '../components/Settings';
 import Recordings from '../components/Recordings';
 import UserBadge from '../components/UserBadge';
+import InviteUserModal from '../components/InviteUserModal';
 import { Play, Share2, Download, FileText, MessageCircle, BarChart3, FileDown, Home, Settings as SettingsIcon, GitBranch, ArrowLeft, Circle, Square, Video } from 'lucide-react';
 
 export default function EditorPage() {
@@ -55,6 +56,7 @@ export default function EditorPage() {
   const yjsSyncTimer = useRef(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [collaborators, setCollaborators] = useState([]);
+  const [showInviteModal, setShowInviteModal] = useState(false);
   
   // Yjs state
   const yDocs = useRef(new Map()); // Map of fileName -> Yjs Doc
@@ -72,8 +74,8 @@ export default function EditorPage() {
   useEffect(() => {
     const loadProject = async () => {
       try {
-        const token = localStorage.getItem('token');
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        const token = sessionStorage.getItem('token');
+        const user = JSON.parse(sessionStorage.getItem('user') || '{}');
         setCurrentUserId(user.id);
         setCurrentUser(user);
         
@@ -85,11 +87,14 @@ export default function EditorPage() {
         );
         console.log('Project loaded from server:', response.data);
         setProjectName(response.data.name || 'Untitled Project');
-        setProjectOwnerId(response.data.owner);
+        setProjectOwnerId(response.data.owner?._id || response.data.owner);
         setCollaborators(response.data.collaborators || []);
+        
         // Determine current user's role (admin if owner)
+        // Handle both populated owner object and owner ID string
         let role = 'viewer';
-        if (response.data.owner === user.id) {
+        const ownerId = response.data.owner?._id || response.data.owner;
+        if (ownerId && ownerId.toString() === user.id) {
           role = 'admin';
         } else {
           const collab = (response.data.collaborators || []).find(c => {
@@ -97,6 +102,7 @@ export default function EditorPage() {
           });
           role = collab?.role || 'viewer';
         }
+        console.log(`[Editor] User ${user.name} role: ${role} (owner: ${ownerId})`);
         setUserRole(role);
         setFiles(response.data.files || []);
         if (response.data.files && response.data.files.length > 0) {
@@ -134,7 +140,7 @@ export default function EditorPage() {
   // Sync analytics to server
   const syncAnalytics = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       await axios.post(
         `http://localhost:5000/api/analytics/project/${projectId}/update`,
         analytics,
@@ -152,7 +158,7 @@ export default function EditorPage() {
     if (projectOwnerId !== currentUserId) return;
     
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get(
         `http://localhost:5000/api/analytics/project/${projectId}`,
         {
@@ -196,7 +202,7 @@ export default function EditorPage() {
     if (!fileName) return;
     
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get(
         `http://localhost:5000/api/git/${projectId}/blame/${encodeURIComponent(fileName)}`,
         {
@@ -319,8 +325,8 @@ export default function EditorPage() {
   // Track line modification
   const trackLineModification = useCallback(async (fileName, lineNumber, content) => {
     try {
-      const token = localStorage.getItem('token');
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const token = sessionStorage.getItem('token');
+      const user = JSON.parse(sessionStorage.getItem('user') || '{}');
       
       await axios.post(
         `http://localhost:5000/api/git/${projectId}/track-modification`,
@@ -399,7 +405,7 @@ export default function EditorPage() {
   // Join room when component mounts or socket reconnects
   useEffect(() => {
     if (socket && projectId) {
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const user = JSON.parse(sessionStorage.getItem('user') || '{}');
       console.log('Joining room:', projectId, 'with socket:', socket.id);
       
       const joinRoom = () => {
@@ -422,9 +428,19 @@ export default function EditorPage() {
         setOnlineUsers(users);
       });
 
+      // Listen for join errors (access denied)
+      socket.on('join-error', (data) => {
+        console.error('Join error:', data);
+        alert(data.message || 'Failed to join room');
+        if (data.requiresInvite) {
+          navigate('/dashboard');
+        }
+      });
+
       return () => {
         socket.off('connect', joinRoom);
         socket.off('room-users');
+        socket.off('join-error');
       };
     }
   }, [socket, projectId, navigate]);
@@ -437,7 +453,7 @@ export default function EditorPage() {
     }));
     
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       await axios.put(
         `http://localhost:5000/api/projects/${projectId}`,
         { files: updatedFiles },
@@ -504,7 +520,7 @@ export default function EditorPage() {
       socket.emit('file-deleted', {
         roomId: projectId,
         fileId: fileId,
-        deletedBy: JSON.parse(localStorage.getItem('user') || '{}').name
+        deletedBy: JSON.parse(sessionStorage.getItem('user') || '{}').name
       });
     }
     
@@ -899,7 +915,7 @@ export default function EditorPage() {
 
     const autoSaveServer = setInterval(() => {
       if (files.length > 0) {
-        const token = localStorage.getItem('token');
+        const token = sessionStorage.getItem('token');
         axios.put(
           `http://localhost:5000/api/projects/${projectId}`,
           { files: files },
@@ -933,7 +949,7 @@ export default function EditorPage() {
 
   const handleStartRecording = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/recordings/${projectId}/start`,
         { title: `Session Recording - ${new Date().toLocaleString()}` },
@@ -967,7 +983,7 @@ export default function EditorPage() {
         return;
       }
       
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/recordings/${projectId}/stop/${recordingId}`,
         { size: recordingDuration * 1024 }, // Estimate: ~1KB per second
@@ -1254,6 +1270,17 @@ export default function EditorPage() {
                 )}
               </button>
               
+              {/* Invite Users Button - Admin Only */}
+              {userRole === 'admin' && (
+                <button
+                  onClick={() => setShowInviteModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-all shadow-lg hover:shadow-xl"
+                  title="Invite users to this room"
+                >
+                  <Share2 size={16} /> Invite
+                </button>
+              )}
+              
               {/* Run Button */}
               <button
                 onClick={handleExecuteCode}
@@ -1419,6 +1446,17 @@ export default function EditorPage() {
           </div>
         </div>
       </div>
+      
+      {/* Invite Modal - Admin Only */}
+      {showInviteModal && userRole === 'admin' && (
+        <InviteUserModal
+          isOpen={showInviteModal}
+          onClose={() => setShowInviteModal(false)}
+          roomId={projectId}
+          roomName={projectName}
+          socket={socket}
+        />
+      )}
     </div>
   );
 }

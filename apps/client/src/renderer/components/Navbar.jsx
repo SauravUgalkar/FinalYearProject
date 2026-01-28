@@ -4,7 +4,7 @@ import { LogOut, User } from 'lucide-react';
 
 export default function Navbar({ showLogout = false, onLogout }) {
   const navigate = useNavigate();
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const user = JSON.parse(sessionStorage.getItem('user') || '{}');
 
   return (
     <nav className="bg-gray-800 border-b border-gray-700 p-4">
@@ -15,9 +15,6 @@ export default function Navbar({ showLogout = false, onLogout }) {
         >
           <div className="text-2xl font-bold text-white">
             CollabCode
-          </div>
-          <div className="text-xs text-gray-500 -mt-1">
-            Made by Saurav
           </div>
         </div>
 

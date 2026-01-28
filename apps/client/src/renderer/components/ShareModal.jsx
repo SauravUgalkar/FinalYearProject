@@ -19,7 +19,7 @@ export default function ShareModal({ projectId, isOpen, onClose }) {
 
   const fetchCollaborators = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get(
         `http://localhost:5000/api/projects/${projectId}/collaborators`,
         {
@@ -46,7 +46,7 @@ export default function ShareModal({ projectId, isOpen, onClose }) {
     }
 
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.post(
         `http://localhost:5000/api/projects/${projectId}/share`,
         { email: email.toLowerCase().trim(), role },
@@ -72,7 +72,7 @@ export default function ShareModal({ projectId, isOpen, onClose }) {
     if (!window.confirm('Remove this collaborator?')) return;
 
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.delete(
         `http://localhost:5000/api/projects/${projectId}/collaborators/${collaboratorId}`,
         {

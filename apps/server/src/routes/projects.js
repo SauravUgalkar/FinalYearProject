@@ -3,13 +3,11 @@ const router = express.Router();
 const Project = require('../models/Project');
 const jwt = require('jsonwebtoken');
 
-// Middleware to verify JWT
 const verifyToken = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
   }
-
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_secret_key');
     req.userId = decoded.userId;
@@ -19,17 +17,19 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// Create project
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { name, description, language, isPublic } = req.body;
-
     const project = new Project({
       name,
       description,
       language,
       isPublic,
       owner: req.userId,
+      createdBy: req.userId,
+      isInviteOnly: true, // Default to secure mode
+      invitedUsers: [],
+      activeUsers: [],
       files: [
         {
           name: 'main.' + getFileExtension(language),
@@ -39,6 +39,9 @@ router.post('/', verifyToken, async (req, res) => {
       ]
     });
 
+    // Align roomId with the document id to keep the unique index happy
+    project.roomId = project._id.toString();
+
     await project.save();
     res.status(201).json(project);
   } catch (error) {
@@ -46,7 +49,6 @@ router.post('/', verifyToken, async (req, res) => {
   }
 });
 
-// Get all projects for user
 router.get('/', verifyToken, async (req, res) => {
   try {
     const projects = await Project.find({
@@ -54,8 +56,10 @@ router.get('/', verifyToken, async (req, res) => {
         { owner: req.userId },
         { 'collaborators.userId': req.userId }
       ]
-    }).sort({ updatedAt: -1 });
-
+    })
+    .populate('owner', 'name email')
+    .sort({ updatedAt: -1 });
+    
     res.json(projects);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -65,9 +69,30 @@ router.get('/', verifyToken, async (req, res) => {
 // Get specific project
 router.get('/:projectId', verifyToken, async (req, res) => {
   try {
-    const project = await Project.findById(req.params.projectId);
+    const project = await Project.findById(req.params.projectId)
+      .populate('owner', 'name email');
+    
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Security check: Only allow access if:
+    // 1. User is the owner, OR
+    // 2. User is a collaborator, OR
+    // 3. Project is public, OR
+    // 4. User was invited (in invitedUsers array)
+    const isOwner = project.owner._id.toString() === req.userId;
+    const isCollaborator = project.collaborators.some(
+      c => c.userId && c.userId.toString() === req.userId
+    );
+    const isInvited = project.invitedUsers && project.invitedUsers.some(
+      id => id.toString() === req.userId
+    );
+
+    if (!isOwner && !isCollaborator && !project.isPublic && !isInvited) {
+      return res.status(403).json({ 
+        error: 'Access denied. You must be invited to view this room.' 
+      });
     }
 
     res.json(project);
@@ -76,27 +101,45 @@ router.get('/:projectId', verifyToken, async (req, res) => {
   }
 });
 
-// Update project
 router.put('/:projectId', verifyToken, async (req, res) => {
   try {
     const { name, description, files } = req.body;
-    const project = await Project.findByIdAndUpdate(
+    
+    // Verify ownership before allowing update
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    if (project.owner.toString() !== req.userId) {
+      return res.status(403).json({ error: 'Only project owner can update project details' });
+    }
+
+    const updatedProject = await Project.findByIdAndUpdate(
       req.params.projectId,
       { name, description, files, updatedAt: new Date() },
       { new: true }
     );
-
-    res.json(project);
+    res.json(updatedProject);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Delete project
 router.delete('/:projectId', verifyToken, async (req, res) => {
   try {
-    const project = await Project.findByIdAndDelete(req.params.projectId);
-    res.json({ message: 'Project deleted', project });
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Only owner can delete project
+    if (project.owner.toString() !== req.userId) {
+      return res.status(403).json({ error: 'Only project owner can delete project' });
+    }
+
+    const deletedProject = await Project.findByIdAndDelete(req.params.projectId);
+    res.json({ message: 'Project deleted', project: deletedProject });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -107,34 +150,26 @@ router.post('/:projectId/share', verifyToken, async (req, res) => {
   try {
     const { email, role } = req.body;
     const { projectId } = req.params;
-
-    // Find project
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Check if user is owner or admin
     if (project.owner.toString() !== req.userId) {
-      const isAdmin = project.collaborators.find(
-        c => c.userId.toString() === req.userId && c.role === 'admin'
-      );
+      const isAdmin = project.collaborators.find(c => c.userId.toString() === req.userId && c.role === 'admin');
       if (!isAdmin) {
         return res.status(403).json({ error: 'You do not have permission to share this project' });
       }
     }
 
-    // Validate role
     if (!['viewer', 'editor', 'admin'].includes(role)) {
-      return res.status(400).json({ error: 'Invalid role. Must be viewer, editor, or admin' });
+      return res.status(400).json({ error: 'Invalid role' });
     }
 
-    // Check if already shared
     const existingCollaborator = project.collaborators.find(c => c.email === email);
     if (existingCollaborator) {
       existingCollaborator.role = role;
     } else {
-      // Find user by email to get userId
       const User = require('../models/User');
       const user = await User.findOne({ email });
       

@@ -13,7 +13,7 @@ const Recordings = ({ projectId }) => {
   const fetchRecordings = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get(`http://localhost:5000/api/recordings/${projectId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -77,7 +77,7 @@ const Recordings = ({ projectId }) => {
     }
 
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       await axios.delete(`http://localhost:5000/api/recordings/${projectId}/recordings/${recordingId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });

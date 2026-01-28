@@ -48,7 +48,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 function ProtectedRoute({ element, user }) {
   // Check localStorage as fallback if user state hasn't updated yet
-  const storedUser = localStorage.getItem('user');
+  const storedUser = sessionStorage.getItem('user');
   const hasAuth = user || storedUser;
   
   if (!hasAuth) {

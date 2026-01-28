@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 export default function Register() {
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({ name: '', email: '', password: '', confirmPassword: '' });
+  const [formData, setFormData] = useState({ name: '', email: '', password: '', confirmPassword: '', skill: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -28,10 +28,11 @@ export default function Register() {
       const response = await axios.post('http://localhost:5000/api/auth/register', {
         name: formData.name,
         email: formData.email,
-        password: formData.password
+        password: formData.password,
+        codingLanguages: formData.skill ? [formData.skill] : []
       });
-      localStorage.setItem('token', response.data.token);
-      localStorage.setItem('user', JSON.stringify(response.data.user));
+      sessionStorage.setItem('token', response.data.token);
+      sessionStorage.setItem('user', JSON.stringify(response.data.user));
       navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Registration failed');
@@ -70,6 +71,18 @@ export default function Register() {
               onChange={handleChange}
               className="w-full px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:outline-none focus:border-blue-500"
               required
+            />
+          </div>
+
+          <div>
+            <label className="block text-gray-300 text-sm font-medium mb-2">Skill</label>
+            <input
+              type="text"
+              name="skill"
+              value={formData.skill}
+              onChange={handleChange}
+              placeholder="e.g., JavaScript"
+              className="w-full px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:outline-none focus:border-blue-500"
             />
           </div>
 

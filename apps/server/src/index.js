@@ -1,10 +1,4 @@
-/**
- * CollabCode Server Entry
- * ----------------------
- * - Express + Socket.IO
- * - MongoDB (authenticated)
- * - Redis (ioredis) + BullMQ
- */
+
 
 require("dotenv").config();
 
@@ -250,10 +244,31 @@ global.jobRoomMap = jobRoomMap;
 // -----------------------------------------------------------------------------
 console.log("Using Mongo URI:", process.env.MONGODB_URI);
 
+const backfillRoomIds = async () => {
+  try {
+    const result = await Project.updateMany(
+      { $or: [{ roomId: null }, { roomId: { $exists: false } }] },
+      [
+        {
+          $set: {
+            roomId: { $toString: '$_id' }
+          }
+        }
+      ]
+    );
+    if (result.modifiedCount) {
+      console.log(`Backfilled roomId for ${result.modifiedCount} project(s)`);
+    }
+  } catch (err) {
+    console.error('Failed to backfill roomId:', err.message);
+  }
+};
+
 mongoose
   .connect(MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log("MongoDB connected");
+    await backfillRoomIds();
   })
   .catch((err) => {
     console.error("MongoDB connection failed:", err.message);
@@ -277,20 +292,74 @@ app.use("/api/github", require("./routes/github"));
 app.use("/api/recordings", require("./routes/recordings"));
 app.use("/api/git", require("./routes/git"));
 app.use("/api/chat", require("./routes/chat"));
+app.use("/api/invites", require("./routes/invites"));
 
 // -----------------------------------------------------------------------------
 // SOCKET.IO
 // -----------------------------------------------------------------------------
 const RoomManager = require("./sockets/roomManager");
 const yjsProvider = require("./sockets/yjsProvider");
+const RoomInvite = require("./models/RoomInvite");
 const roomManager = new RoomManager(io, redisClient, executionQueue);
 
 io.on("connection", (socket) => {
-  console.log(`[Socket] Connected: ${socket.id}`);
+  // Extract user identity from socket handshake
+  const { token, userId, userName, userEmail } = socket.handshake.auth || {};
+  
+  // Attach user data directly to this socket connection (tab-isolated)
+  socket.data = {
+    userId: userId,
+    userName: userName || 'Anonymous',
+    userEmail: userEmail,
+    token: token
+  };
+  
+  console.log(`[Socket] Connected: ${socket.id}, User: ${userName} (${userId})`);
 
-  socket.on("join-room", (data) => {
-    console.log(`[Socket] join-room requested for room ${data.roomId} by user ${data.userName} (socket ${socket.id})`);
-    roomManager.joinRoom(socket, data.roomId, data.userId, data.userName);
+  socket.on("join-room", async (data) => {
+    // Use socket.data for user identity instead of data params
+    const effectiveUserId = socket.data.userId || data.userId;
+    const effectiveUserName = socket.data.userName || data.userName;
+    
+    console.log(`[Socket] join-room requested for room ${data.roomId} by user ${effectiveUserName} (socket ${socket.id})`);
+    
+    try {
+      // Security check: Verify user is authorized to join this room
+      const room = await Project.findById(data.roomId);
+      
+      if (!room) {
+        socket.emit('join-error', { 
+          message: 'Room not found' 
+        });
+        return;
+      }
+
+      const isOwner = room.owner.toString() === effectiveUserId;
+      const isCollaborator = room.collaborators.some(
+        c => c.userId && c.userId.toString() === effectiveUserId
+      );
+      const isInvited = room.invitedUsers && room.invitedUsers.some(
+        id => id.toString() === effectiveUserId
+      );
+
+      // Allow join if: owner, collaborator, invited, or public room
+      if (!isOwner && !isCollaborator && !isInvited && !room.isPublic) {
+        socket.emit('join-error', { 
+          message: 'Access denied. You must be invited by the room admin to join this room.',
+          requiresInvite: true
+        });
+        console.log(`[Socket] Access denied for user ${effectiveUserName} to room ${data.roomId}`);
+        return;
+      }
+
+      // Authorized - proceed with join
+      roomManager.joinRoom(socket, data.roomId, effectiveUserId, effectiveUserName);
+    } catch (error) {
+      console.error('[Socket] Error checking room permissions:', error);
+      socket.emit('join-error', { 
+        message: 'Failed to join room' 
+      });
+    }
   });
 
   socket.on("code-change", async (data) => {
@@ -408,6 +477,71 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);
     roomManager.handleDisconnect(socket);
+  });
+
+  // Invite system events
+  socket.on("invite-user-to-room", async (data) => {
+    const { roomId, userId, roomName, invitedBy } = data;
+    console.log(`[Socket] invite-user-to-room: ${invitedBy} inviting user ${userId} to ${roomName}`);
+    
+    try {
+      // Find all sockets for the invited user
+      const allSockets = await io.fetchSockets();
+      const targetSockets = allSockets.filter(s => s.data.userId === userId);
+      
+      if (targetSockets.length > 0) {
+        targetSockets.forEach(targetSocket => {
+          targetSocket.emit('room-invite-received', {
+            inviteId: data.inviteId,
+            roomId,
+            roomName,
+            invitedBy,
+            message: `${invitedBy} invited you to join "${roomName}"`,
+            expiresAt: data.expiresAt
+          });
+        });
+        console.log(`[Socket] Sent invite notification to ${targetSockets.length} socket(s)`);
+      } else {
+        console.log(`[Socket] User ${userId} not currently connected`);
+      }
+    } catch (error) {
+      console.error('[Socket] Error sending invite notification:', error);
+    }
+  });
+
+  socket.on("accept-invite-notification", async (data) => {
+    const { inviteId } = data;
+    console.log(`[Socket] accept-invite-notification for invite ${inviteId}`);
+    
+    try {
+      const invite = await RoomInvite.findById(inviteId).populate('invitedBy', 'name');
+      if (invite) {
+        // Notify admin
+        const allSockets = await io.fetchSockets();
+        const adminSockets = allSockets.filter(s => s.data.userId === invite.invitedBy._id.toString());
+        
+        adminSockets.forEach(adminSocket => {
+          adminSocket.emit('invite-accepted', {
+            inviteId,
+            userName: socket.data.userName
+          });
+        });
+      }
+    } catch (error) {
+      console.error('[Socket] Error handling accept notification:', error);
+    }
+  });
+
+  socket.on("user-joined-room-notification", async (data) => {
+    const { roomId, userId, userName } = data;
+    console.log(`[Socket] user-joined-room-notification: ${userName} joined room ${roomId}`);
+    
+    // Broadcast to all users in the room
+    socket.to(roomId).emit('user-joined-room', {
+      userId,
+      userName,
+      timestamp: new Date()
+    });
   });
 
   // Log active room map periodically for debugging

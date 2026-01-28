@@ -9,13 +9,25 @@ export function useSocket() {
     // Initialize socket immediately in state initializer
     if (!socketInstance && !isInitialized) {
       isInitialized = true;
+      
+      // Get user data from sessionStorage for socket handshake
+      const userJson = sessionStorage.getItem('user');
+      const token = sessionStorage.getItem('token');
+      const user = userJson ? JSON.parse(userJson) : null;
+      
       socketInstance = io('http://localhost:5000', {
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        reconnectionAttempts: 5
+        reconnectionAttempts: 5,
+        auth: {
+          token: token,
+          userId: user?.id || user?._id,
+          userName: user?.name,
+          userEmail: user?.email
+        }
       });
-      console.log('[useSocket] Socket instance created:', socketInstance.id);
+      console.log('[useSocket] Socket instance created:', socketInstance.id, 'User:', user?.name);
     }
     return socketInstance;
   });

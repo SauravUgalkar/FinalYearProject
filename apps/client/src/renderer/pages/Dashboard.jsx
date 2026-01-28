@@ -1,25 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Plus, Folder, Trash2, Share2, Clock, Code2, Users } from 'lucide-react';
+import { Plus, Folder, Trash2, Share2, Clock, Code2, Users, Info } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ShareModal from '../components/ShareModal';
+import ProjectInfoModal from '../components/ProjectInfoModal';
 import Navbar from '../components/Navbar';
 import LogoutConfirmModal from '../components/LogoutConfirmModal';
-import { disconnectSocket } from '../hooks/useSocket';
+import JoinRequestNotification from '../components/JoinRequestNotification';
+import { disconnectSocket, useSocket } from '../hooks/useSocket';
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { socket } = useSocket();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNewProject, setShowNewProject] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     language: 'javascript'
   });
+
+  useEffect(() => {
+    const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+    setCurrentUser(user);
+  }, []);
 
   const handleLogout = () => {
     setShowLogoutModal(true);
@@ -30,9 +40,9 @@ export default function Dashboard() {
     disconnectSocket();
     
     // Clear all session data
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('github_token');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('user');
+    sessionStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
     // Navigate to login page with a small delay to ensure localStorage is cleared
@@ -47,7 +57,7 @@ export default function Dashboard() {
 
   const fetchProjects = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await axios.get('http://localhost:5000/api/projects', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -61,7 +71,7 @@ export default function Dashboard() {
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     
     if (!token) {
       console.error('No token found');
@@ -96,7 +106,7 @@ export default function Dashboard() {
 
   const handleDeleteProject = async (projectId) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       await axios.delete(`http://localhost:5000/api/projects/${projectId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -123,8 +133,10 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
+    <div className="min-h-screen bg-black">
       <Navbar showLogout={true} onLogout={handleLogout} />
+      {/* Invite bell + panel (appears when this user has pending invites) */}
+      <JoinRequestNotification socket={socket} />
       
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Header */}
@@ -215,19 +227,19 @@ export default function Dashboard() {
                 />
               </div>
 
-              <div>
-                <label className="block text-gray-300 text-sm font-semibold mb-2">Programming Language</label>
-                <select
-                  value={formData.language}
-                  onChange={(e) => setFormData({...formData, language: e.target.value})}
-                  className="w-full px-4 py-3 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-900 transition"
-                >
-                  <option value="javascript">JavaScript</option>
-                  <option value="python">Python</option>
-                  <option value="java">Java</option>
-                  <option value="cpp">C++</option>
-                  <option value="csharp">C#</option>
-                </select>
+              <div className="rounded-lg border border-gray-800 bg-gray-900 px-4 py-3">
+                <p className="text-gray-300 text-sm font-semibold mb-2">You can code in these languages</p>
+                <div className="flex flex-wrap gap-2 text-sm">
+                  {['JavaScript', 'Python', 'Java', 'C++', 'C#'].map((lang) => (
+                    <span
+                      key={lang}
+                      className="px-3 py-1 rounded-full bg-gray-800 text-gray-200 border border-gray-700"
+                    >
+                      {lang}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Default project language is JavaScript; you can switch per file in the editor.</p>
               </div>
 
               <div className="flex gap-3 pt-2">
@@ -261,29 +273,34 @@ export default function Dashboard() {
                   <Folder className="text-blue-400" size={28} />
                 </div>
                 <div className="flex gap-2">
+                  {/* Info button - visible to all */}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedProjectId(project._id);
-                      setShareModalOpen(true);
+                      setInfoModalOpen(true);
                     }}
-                    className="p-2 text-green-400 hover:text-green-300 hover:bg-gray-800 rounded-lg transition"
-                    title="Share project"
+                    className="p-2 text-blue-400 hover:text-blue-300 hover:bg-gray-800 rounded-lg transition"
+                    title="Project information"
                   >
-                    <Share2 size={18} />
+                    <Info size={18} />
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm('Delete this project?')) {
-                        handleDeleteProject(project._id);
-                      }
-                    }}
-                    className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-800 rounded-lg transition"
-                    title="Delete project"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+                  
+                  {/* Delete button - admin only */}
+                  {(project.owner?._id || project.owner) === currentUser?.id && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Delete this project?')) {
+                          handleDeleteProject(project._id);
+                        }
+                      }}
+                      className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-800 rounded-lg transition"
+                      title="Delete project"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -348,6 +365,17 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Project Info Modal */}
+        <ProjectInfoModal
+          projectId={selectedProjectId}
+          isOpen={infoModalOpen}
+          currentUser={currentUser}
+          onClose={() => {
+            setInfoModalOpen(false);
+            setSelectedProjectId(null);
+          }}
+        />
 
         {/* Share Modal */}
         <ShareModal

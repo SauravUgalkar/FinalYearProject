@@ -16,7 +16,7 @@ export default function GithubCallback() {
 
       try {
         // Include Authorization when available so server can persist token to user
-        const authToken = localStorage.getItem('token');
+        const authToken = sessionStorage.getItem('token');
         const res = await fetch('http://localhost:5000/api/github/callback', {
           method: 'POST',
           headers: {

@@ -33,7 +33,7 @@ export default function Chat({ roomId, onlineUsers = [] }) {
     // Fetch persisted chat history on mount
     const fetchHistory = async () => {
       try {
-        const token = localStorage.getItem('token');
+        const token = sessionStorage.getItem('token');
         const res = await axios.get(`http://localhost:5000/api/chat/project/${roomId}` , {
           headers: { Authorization: `Bearer ${token}` }
         });

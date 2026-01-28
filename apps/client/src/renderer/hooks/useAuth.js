@@ -5,8 +5,8 @@ export function useAuthContext() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    const token = localStorage.getItem('token');
+    const storedUser = sessionStorage.getItem('user');
+    const token = sessionStorage.getItem('token');
 
     if (storedUser && token) {
       setUser(JSON.parse(storedUser));
@@ -16,8 +16,8 @@ export function useAuthContext() {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
+    sessionStorage.removeItem('user');
+    sessionStorage.removeItem('token');
     setUser(null);
   }, []);
 

@@ -25,22 +25,16 @@ const redisClient = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379
 let redisConnected = false;
 redisClient.on('error', (err) => {
   if (!redisConnected) {
-    console.error('\n❌ Redis connection failed!');
-    console.error('   Make sure Redis is running on localhost:6379');
-    console.error('\n📋 To start Redis:');
-    console.error('   Option 1: docker compose up -d redis');
-    console.error('   Option 2: Install and run redis-server\n');
+    console.error('Redis connection failed');
   }
 });
 redisClient.on('connect', () => {
   redisConnected = true;
-  console.log('✅ Redis connected');
+  console.log('Redis connected');
 });
 
-// Code execution directory
 const EXECUTION_DIR = '/tmp/code-execution';
 
-// Helper function to run command with input
 const runCommandWithInput = (command, args, input, timeout = 10000) => {
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, {
@@ -76,7 +70,6 @@ const runCommandWithInput = (command, args, input, timeout = 10000) => {
   });
 };
 
-// Initialize execution worker
 const worker = new Worker('code-execution', async (job) => {
   console.log(`Processing job ${job.id}...`);
 
@@ -85,7 +78,6 @@ const worker = new Worker('code-execution', async (job) => {
   const fileName = `job_${jobId}`;
 
   try {
-    // Create temporary directory for execution
     const tempDir = path.join(EXECUTION_DIR, fileName);
     await fs.mkdir(tempDir, { recursive: true });
 
@@ -93,7 +85,6 @@ const worker = new Worker('code-execution', async (job) => {
     let commandArgs = [];
     let result = null;
 
-    // Prepare execution based on language
     switch (language) {
       case 'javascript':
         {
@@ -109,8 +100,6 @@ const worker = new Worker('code-execution', async (job) => {
         {
           const pyFile = path.join(tempDir, `${fileName}.py`);
           await fs.writeFile(pyFile, code);
-
-          // Prefer python3, fallback to python on Windows if python3 alias missing
           const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
           executeCommand = pythonCmd;
           commandArgs = [pyFile];
@@ -122,18 +111,9 @@ const worker = new Worker('code-execution', async (job) => {
         {
           const javaFile = path.join(tempDir, `${fileName}.java`);
           const className = fileName;
-          
-          // Java requires specific class name
-          const javaCode = code.replace(
-            /public\s+class\s+\w+/,
-            `public class ${className}`
-          );
-          
+          const javaCode = code.replace(/public\s+class\s+\w+/, `public class ${className}`);
           await fs.writeFile(javaFile, javaCode);
-          
-          // Compile Java
           await execAsync(`cd "${tempDir}" && javac "${javaFile}"`);
-          
           executeCommand = 'java';
           commandArgs = ['-cp', tempDir, className];
           result = await runCommandWithInput(executeCommand, commandArgs, input);
@@ -144,16 +124,11 @@ const worker = new Worker('code-execution', async (job) => {
         {
           const cppFile = path.join(tempDir, `${fileName}.cpp`);
           const exeFile = path.join(tempDir, process.platform === 'win32' ? `${fileName}.exe` : fileName);
-          
           await fs.writeFile(cppFile, code);
-          
-          // Compile C++
           const compileCmd = process.platform === 'win32' 
             ? `cd "${tempDir}" && g++ -o ${fileName}.exe "${cppFile}"`
             : `cd "${tempDir}" && g++ -o ${fileName} "${cppFile}"`;
-          
           await execAsync(compileCmd);
-          
           executeCommand = exeFile;
           commandArgs = [];
           result = await runCommandWithInput(executeCommand, commandArgs, input);
@@ -224,13 +199,11 @@ const worker = new Worker('code-execution', async (job) => {
       memoryUsed: 0
     };
   } catch (error) {
-    // Clean up
     try {
       await fs.rm(path.join(EXECUTION_DIR, fileName), { recursive: true, force: true });
     } catch (cleanupError) {
       console.error('Cleanup error:', cleanupError);
     }
-
     const isTimeout = error.message.includes('timeout');
     return {
       status: isTimeout ? 'timeout' : 'error',

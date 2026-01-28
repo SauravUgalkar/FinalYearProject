@@ -86,7 +86,7 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
         .replace(/\s+/g, '-')
         .replace(/[^a-z0-9-]/g, '') || 'collabcode-project';
 
-      const authToken = localStorage.getItem('token');
+      const authToken = sessionStorage.getItem('token');
       if (!authToken) {
         throw new Error('You must be logged in to export to GitHub');
       }
