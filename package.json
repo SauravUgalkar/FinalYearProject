@@ -1,0 +1,34 @@
+{
+  "name": "collab-code-web",
+  "version": "1.0.0",
+  "description": "Web-based collaborative coding and student performance tracking platform",
+  "private": true,
+  "workspaces": [
+    "apps/client",
+    "apps/server",
+    "apps/worker"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=apps/server\" \"npm start --workspace=apps/client\"",
+    "dev:all": "concurrently \"npm run dev --workspace=apps/server\" \"npm start --workspace=apps/client\" \"npm run dev --workspace=apps/worker\"",
+    "build": "npm run build --workspaces",
+    "start": "npm start --workspace=apps/server",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:build": "docker compose build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "collaborative",
+    "coding",
+    "education",
+    "real-time",
+    "web",
+    "react"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}

@@ -1,0 +1,106 @@
+/* App Styles */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #000000 !important;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #000000 !important;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: #000000 !important;
+}
+
+/* GitLens-like blame decorations */
+.blame-decoration {
+  opacity: 0.4;
+  font-style: italic;
+  font-size: 12px;
+  color: #858585;
+  margin-left: 20px;
+  user-select: none;
+  pointer-events: none;
+}
+
+.blame-decoration-after {
+  opacity: 0.4;
+}
+
+/* Show blame on hover */
+.monaco-editor .view-line:hover .blame-decoration {
+  opacity: 0.6;
+}
+
+/* Conflict highlighting in Monaco Editor */
+.conflict-line {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.conflict-glyph {
+  background-color: rgba(239, 68, 68, 0.5);
+}
+
+.conflict-margin {
+  background-color: rgba(239, 68, 68, 0.05) !important;
+}
+
+.monaco-editor .view-line.conflict-line {
+  border-left: 3px solid rgba(239, 68, 68, 0.7);
+}
+
+/* Conflict notification toast */
+.conflict-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(220, 38, 38, 0.95));
+  border: 1px solid rgba(239, 68, 68, 0.8);
+  padding: 16px 20px;
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  color: white;
+  font-size: 14px;
+  z-index: 9999;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.conflict-notification-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.conflict-notification-details {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
