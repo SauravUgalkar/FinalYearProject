@@ -60,6 +60,21 @@ code {
   font-family: 'Fira Code', monospace;
 }
 
+/* File tree row colors are forced to avoid theme/global overrides causing white-on-white hover */
+.file-tree-row {
+  color: #d1d5db !important;
+}
+
+.file-tree-row:hover {
+  background-color: #1f2937 !important;
+  color: #ffffff !important;
+}
+
+.file-tree-row-selected {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+}
+
 /* Smooth transitions */
 * {
   transition: background-color 0.2s, color 0.2s, border-color 0.2s;

@@ -18,6 +18,11 @@ const roomInviteSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  role: {
+    type: String,
+    enum: ['viewer', 'editor'],
+    default: 'editor'
+  },
   status: {
     type: String,
     enum: ['pending', 'accepted', 'rejected', 'expired'],

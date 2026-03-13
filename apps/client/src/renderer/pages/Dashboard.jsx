@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Plus, Folder, Trash2, Share2, Clock, Code2, Users, Info } from 'lucide-react';
+import { Plus, Folder, Trash2, Code2, Users, Info } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ShareModal from '../components/ShareModal';
 import ProjectInfoModal from '../components/ProjectInfoModal';
@@ -132,6 +132,108 @@ export default function Dashboard() {
     0
   );
 
+  const getProjectConnectedPeopleCount = (project) => {
+    const collaboratorsCount = Array.isArray(project?.collaborators)
+      ? project.collaborators.length
+      : 0;
+    // Owner is always connected to the project membership model.
+    return collaboratorsCount + 1;
+  };
+
+  const languageAlias = {
+    javascript: 'js',
+    python: 'py',
+    java: 'java',
+    cpp: 'cpp',
+    c: 'c',
+    csharp: 'c#',
+    typescript: 'ts',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    markdown: 'md',
+  };
+
+  const inferLanguageFromFileName = (fileName = '') => {
+    const extension = String(fileName).split('.').pop()?.toLowerCase();
+    const byExt = {
+      js: 'javascript',
+      jsx: 'javascript',
+      ts: 'typescript',
+      tsx: 'typescript',
+      py: 'python',
+      java: 'java',
+      c: 'c',
+      cpp: 'cpp',
+      cc: 'cpp',
+      cxx: 'cpp',
+      cs: 'csharp',
+      html: 'html',
+      css: 'css',
+      json: 'json',
+      md: 'markdown',
+    };
+    return byExt[extension] || null;
+  };
+
+  const getProjectLanguageTags = (project) => {
+    const languages = new Set();
+
+    (project?.files || []).forEach((file) => {
+      const normalized = String(file?.language || '').trim().toLowerCase();
+      const inferred = inferLanguageFromFileName(file?.name || '');
+      const lang = normalized || inferred;
+      if (lang && lang !== 'plaintext') {
+        languages.add(languageAlias[lang] || lang);
+      }
+    });
+
+    if (languages.size === 0) {
+      const fallback = String(project?.language || '').trim().toLowerCase();
+      if (fallback) {
+        languages.add(languageAlias[fallback] || fallback);
+      }
+    }
+
+    return Array.from(languages);
+  };
+
+  const formatRelativeTime = (timestamp) => {
+    if (!timestamp) return 'Unknown';
+
+    const diffMs = Date.now() - new Date(timestamp).getTime();
+    if (Number.isNaN(diffMs) || diffMs < 0) return 'Just now';
+
+    const minutes = Math.floor(diffMs / (1000 * 60));
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+
+    return new Date(timestamp).toLocaleDateString();
+  };
+
+  const getProjectRoleLabel = (project) => {
+    const currentUserId = String(currentUser?.id || currentUser?._id || '');
+    const ownerId = project.owner?._id || project.owner;
+    if (String(ownerId || '') === currentUserId) {
+      return 'Owner';
+    }
+
+    const myCollab = (project.collaborators || []).find(
+      (collab) => String(collab.userId || '') === currentUserId
+    );
+
+    if (myCollab?.role === 'admin') return 'Admin';
+    if (myCollab?.role === 'viewer') return 'Viewer';
+    return 'Editor';
+  };
+
+  const getProjectFilesCount = (project) => (Array.isArray(project?.files) ? project.files.length : 0);
+
   return (
     <div className="min-h-screen bg-black">
       <Navbar showLogout={true} onLogout={handleLogout} />
@@ -144,7 +246,7 @@ export default function Dashboard() {
           <h1 className="text-5xl font-bold text-white mb-2">
             Your Workspace
           </h1>
-          <p className="text-gray-400 text-lg">Create, collaborate, and ship code faster</p>
+          <p className="text-gray-400 text-lg">Create, collaborate, and learn code faster</p>
         </div>
 
         {/* Stats Overview */}
@@ -269,7 +371,7 @@ export default function Dashboard() {
               onClick={() => navigate(`/editor/${project._id}`)}
             >
               <div className="flex items-start justify-between mb-4">
-                <div className="p-3 bg-blue-600 bg-opacity-20 rounded-lg">
+                <div className="p-3 bg-blue-600 bg-opacity-20 rounded-lg shadow-lg shadow-blue-900/30">
                   <Folder className="text-blue-400" size={28} />
                 </div>
                 <div className="flex gap-2">
@@ -287,7 +389,7 @@ export default function Dashboard() {
                   </button>
                   
                   {/* Delete button - admin only */}
-                  {(project.owner?._id || project.owner) === currentUser?.id && (
+                  {String(project.owner?._id || project.owner || '') === String(currentUser?.id || currentUser?._id || '') && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -312,39 +414,31 @@ export default function Dashboard() {
                 {project.description || 'No description provided'}
               </p>
 
-              <div className="pt-4 border-t border-gray-800 space-y-2">
-                {project.collaborators && project.collaborators.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <div className="flex -space-x-2">
-                      {project.collaborators.slice(0, 3).map((collab, idx) => (
-                        <div
-                          key={idx}
-                          className="w-7 h-7 rounded-full bg-gradient-to-r from-green-600 to-blue-600 border-2 border-gray-900 flex items-center justify-center text-white text-xs font-bold"
-                          title={collab.email || 'Collaborator'}
-                        >
-                          {collab.email?.[0]?.toUpperCase() || '?'}
-                        </div>
-                      ))}
-                      {project.collaborators.length > 3 && (
-                        <div className="w-7 h-7 rounded-full bg-gray-700 border-2 border-gray-900 flex items-center justify-center text-gray-300 text-xs font-bold">
-                          +{project.collaborators.length - 3}
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-xs text-gray-400">{project.collaborators.length} collaborator{project.collaborators.length !== 1 ? 's' : ''}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <span className="text-xs bg-gradient-to-r from-blue-600 to-purple-600 text-white px-3 py-1.5 rounded-lg font-medium">
-                    {project.language}
-                  </span>
-                  <div className="flex items-center gap-1 text-xs text-gray-500">
-                    <Clock size={14} />
-                    <span>Recent</span>
-                  </div>
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">Files</p>
+                  <p className="text-sm font-semibold text-gray-200">{getProjectFilesCount(project)}</p>
+                </div>
+                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">Updated</p>
+                  <p className="text-sm font-semibold text-gray-200">{formatRelativeTime(project.updatedAt || project.createdAt)}</p>
+                </div>
+                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">Active</p>
+                  <p className="text-sm font-semibold text-gray-200">
+                    {getProjectConnectedPeopleCount(project)} collaborator{getProjectConnectedPeopleCount(project) !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                  <p className="text-[11px] uppercase tracking-wide text-gray-500">Your Role</p>
+                  <p className="text-sm font-semibold text-gray-200">{getProjectRoleLabel(project)}</p>
                 </div>
               </div>
+
+              
+            
             </div>
+            
           ))}
         </div>
 

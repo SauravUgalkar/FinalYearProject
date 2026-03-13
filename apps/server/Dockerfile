@@ -2,6 +2,8 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache git
+
 # Install dependencies (npm install instead of ci to tolerate missing lockfile)
 COPY package*.json ./
 RUN npm install --only=production

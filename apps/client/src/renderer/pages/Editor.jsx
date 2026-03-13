@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -11,10 +11,10 @@ import Analytics from '../components/Analytics';
 import ExportModal from '../components/ExportModal';
 import GitControl from '../components/GitControl';
 import Settings from '../components/Settings';
-import Recordings from '../components/Recordings';
 import UserBadge from '../components/UserBadge';
 import InviteUserModal from '../components/InviteUserModal';
-import { Play, Share2, Download, FileText, MessageCircle, BarChart3, FileDown, Home, Settings as SettingsIcon, GitBranch, ArrowLeft, Circle, Square, Video } from 'lucide-react';
+import ImportRepoModal from '../components/ImportRepoModal';
+import { Play, Share2, Download, FileText, MessageCircle, BarChart3, FileDown, Home, Settings as SettingsIcon, GitBranch, ArrowLeft } from 'lucide-react';
 
 export default function EditorPage() {
   const { projectId } = useParams();
@@ -23,16 +23,15 @@ export default function EditorPage() {
   const [files, setFiles] = useState([]);
   const [currentFile, setCurrentFile] = useState(null);
   const [executionOutput, setExecutionOutput] = useState('');
+  const [compileError, setCompileError] = useState('');
+  const [runtimeError, setRuntimeError] = useState('');
   const [executionInput, setExecutionInput] = useState('');
-  const [sidebarTab, setSidebarTab] = useState('files'); // 'files', 'chat', 'analytics', 'export', 'git', 'settings', or 'recordings'
+  const [sidebarTab, setSidebarTab] = useState('files'); // 'files', 'chat', 'analytics', 'export', 'git', or 'settings'
   const [projectName, setProjectName] = useState('Untitled Project');
   const [projectOwnerId, setProjectOwnerId] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [userRole, setUserRole] = useState('viewer');
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingStartTime, setRecordingStartTime] = useState(null);
-  const [recordingDuration, setRecordingDuration] = useState(0);
   const [analytics, setAnalytics] = useState({
     totalRuns: 0,
     successfulRuns: 0,
@@ -57,6 +56,7 @@ export default function EditorPage() {
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [collaborators, setCollaborators] = useState([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [editorTheme, setEditorTheme] = useState('vs-dark'); // 'vs-dark' or 'light'
   
   // Yjs state
@@ -70,8 +70,85 @@ export default function EditorPage() {
   const pendingRemoteUpdate = useRef(null); // Queue remote updates during typing
   const monacoEditorRef = useRef(null); // Store Monaco editor instance
   const isApplyingRemoteChange = useRef(false); // Prevent onChange during remote updates
+  const isInitialLoad = useRef(true); // Prevent emitting/applying duplicate content during first hydration
+  const filesRef = useRef([]); // Always-current files for timers/closures that cannot use stale state
+  const saveDebounceRef = useRef(null); // Timer for 2-second debounced HTTP save on keystroke
+  const remoteCursorsRef = useRef(new Map()); // Map of socketId -> cursor payload
+  const remoteCursorDecorationIdsRef = useRef([]);
+  const remoteCursorStyleKeysRef = useRef(new Set());
+  const cursorBroadcastRef = useRef({ lastSentAt: 0, timeoutId: null, pendingPayload: null });
+  const fallbackSyncRef = useRef({ timeoutId: null, pendingPayload: null });
+  const roomStateHydratedRef = useRef(false); // Avoid first stale room-state wiping API-loaded files
+  const apiFilesHydratedRef = useRef(false);
 
-  // Load project files with fallback to localStorage
+  const sanitizeName = useCallback((rawPath) => String(rawPath || '').trim(), []);
+  const normalizePath = useCallback((rawPath) => String(rawPath || '').trim().replace(/\/+$/, ''), []);
+
+  // Keep filesRef in sync with files state so timers/closures never hold stale data
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  // File content map: file path -> file content.
+  // This keeps each file's code isolated and lets the editor load only the active file content.
+  const fileContentMap = useMemo(() => {
+    return files.reduce((acc, file) => {
+      if (!String(file?.name || '').endsWith('/')) {
+        acc[file.name] = typeof file.content === 'string' ? file.content : '';
+      }
+      return acc;
+    }, {});
+  }, [files]);
+
+  const sanitizeProjectFiles = useCallback((projectFiles = []) => {
+    return (projectFiles || [])
+      .map((f) => {
+        const rawName = sanitizeName(f?.name);
+        if (!rawName) return null;
+        // Strip .gitkeep files (they are internal folder-marker placeholders)
+        if (rawName === '.gitkeep' || rawName.endsWith('/.gitkeep')) return null;
+        const inferredLanguage = getLanguageFromExt(rawName);
+        return {
+          ...f,
+          id: f?.id || f?._id || rawName,
+          name: rawName,
+          content: typeof f?.content === 'string' ? f.content : '',
+          language: inferredLanguage !== 'plaintext' ? inferredLanguage : (f?.language || 'plaintext'),
+        };
+      })
+      .filter(Boolean);
+  }, [sanitizeName]);
+
+  const mergeFilesPreservingSavedContent = useCallback((incomingFiles = [], existingFiles = []) => {
+    const existingByPath = new Map(
+      (existingFiles || []).map((file) => [normalizePath(file.name), file])
+    );
+
+    return (incomingFiles || []).map((file) => {
+      const existing = existingByPath.get(normalizePath(file.name));
+      if (!existing) return file;
+
+      const incomingContent = typeof file.content === 'string' ? file.content : '';
+      const existingContent = typeof existing.content === 'string' ? existing.content : '';
+
+      if (existingContent && !incomingContent) {
+        return { ...file, content: existingContent };
+      }
+
+      return file;
+    });
+  }, [normalizePath]);
+
+  useEffect(() => {
+    isInitialLoad.current = true;
+  }, [currentFile?.name]);
+
+  useEffect(() => {
+    roomStateHydratedRef.current = false;
+    apiFilesHydratedRef.current = false;
+  }, [projectId]);
+
+  // Load project files from server only; server is the source of truth.
   useEffect(() => {
     const loadProject = async () => {
       try {
@@ -87,6 +164,7 @@ export default function EditorPage() {
           }
         );
         console.log('Project loaded from server:', response.data);
+        const normalizedFiles = sanitizeProjectFiles(response.data.files || []);
         setProjectName(response.data.name || 'Untitled Project');
         setProjectOwnerId(response.data.owner?._id || response.data.owner);
         setCollaborators(response.data.collaborators || []);
@@ -105,38 +183,29 @@ export default function EditorPage() {
         }
         console.log(`[Editor] User ${user.name} role: ${role} (owner: ${ownerId})`);
         setUserRole(role);
-        setFiles(response.data.files || []);
-        if (response.data.files && response.data.files.length > 0) {
-          setCurrentFile(response.data.files[0]);
-        }
-        // Cache to localStorage
-        localStorage.setItem(`project_${projectId}`, JSON.stringify({
-          name: response.data.name || 'Untitled Project',
-          files: response.data.files || [],
-          lastSync: new Date().toISOString()
-        }));
+        setFiles(normalizedFiles);
+        setCurrentFile(normalizedFiles.find((f) => !f.name.endsWith('/')) || null);
+        apiFilesHydratedRef.current = true;
+        isInitialLoad.current = true;
       } catch (err) {
         console.error('Error loading project from server:', err);
-        // Try to load from localStorage
-        const cached = localStorage.getItem(`project_${projectId}`);
-        if (cached) {
-          try {
-            const cachedProject = JSON.parse(cached);
-            console.log('Loaded project from cache:', cachedProject);
-            setProjectName(cachedProject.name || 'Untitled Project');
-            setFiles(cachedProject.files || []);
-            if (cachedProject.files && cachedProject.files.length > 0) {
-              setCurrentFile(cachedProject.files[0]);
-            }
-          } catch (parseErr) {
-            console.error('Error parsing cached project:', parseErr);
-          }
-        }
+        setFiles([]);
+        setCurrentFile(null);
       }
     };
 
     loadProject();
-  }, [projectId]);
+  }, [projectId, sanitizeProjectFiles]);
+
+  // Sync pulled files back into the editor (called by GitControl after a git pull)
+  const handleFilesFromPull = useCallback((pulledFiles) => {
+    const normalized = sanitizeProjectFiles(pulledFiles || []);
+    setFiles(normalized);
+    setCurrentFile(prev => {
+      const match = normalized.find(f => prev && f.name === prev.name);
+      return match || normalized.find(f => !f.name.endsWith('/')) || null;
+    });
+  }, [sanitizeProjectFiles]);
 
   // Sync analytics to server
   const syncAnalytics = useCallback(async () => {
@@ -219,19 +288,49 @@ export default function EditorPage() {
 
   // Initialize Yjs for a file
   const initializeYjsFile = useCallback((fileName, initialContent) => {
-    if (yDocs.current.has(fileName)) return; // Already initialized
+    let ydoc = yDocs.current.get(fileName);
+    let ytext = yTexts.current.get(fileName);
 
-    const ydoc = new Y.Doc();
-    const ytext = ydoc.getText('shared-text');
-    
-    // Initialize with content
-    ytext.insert(0, initialContent);
-    
-    yDocs.current.set(fileName, ydoc);
-    yTexts.current.set(fileName, ytext);
+    if (!ydoc || !ytext) {
+      ydoc = new Y.Doc();
+      ytext = ydoc.getText('shared-text');
+      yDocs.current.set(fileName, ydoc);
+      yTexts.current.set(fileName, ytext);
+    }
+
+    const startingContent = typeof initialContent === 'string' ? initialContent : '';
+    if (!ytext.toString() && startingContent) {
+      ytext.insert(0, startingContent);
+    }
 
     console.log(`[Yjs] Initialized Yjs document for ${fileName}`);
   }, []);
+
+  const persistProjectFiles = useCallback(async (updatedFiles, options = {}) => {
+    const token = sessionStorage.getItem('token');
+    if (!token) return;
+
+    if (options.keepalive) {
+      await fetch(`http://localhost:5000/api/projects/${projectId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ files: updatedFiles }),
+        keepalive: true,
+      });
+      return;
+    }
+
+    await axios.put(
+      `http://localhost:5000/api/projects/${projectId}`,
+      { files: updatedFiles },
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    );
+  }, [projectId]);
 
   // Show Yjs sync notification
   const showYjsSyncNotification = useCallback((message = 'Syncing...') => {
@@ -256,7 +355,7 @@ export default function EditorPage() {
       roomId: projectId,
       fileName
     });
-  }, [socket, projectId]);
+  }, [socket, projectId, normalizePath]);
 
   // Sync local changes to Yjs and broadcast (debounced)
   const syncYjsChange = useCallback((fileName, content) => {
@@ -376,18 +475,20 @@ export default function EditorPage() {
     setDecorations(newDecorationsIds);
   }, [editorInstance, monacoInstance, blameData]);
 
-  // Fetch blame data when file changes
+  // Fetch blame/Yjs state only when switching files (name changes),
+  // not on every keystroke/content update.
   useEffect(() => {
-    if (currentFile) {
-      fetchBlameData(currentFile.name);
-      
-      // Initialize Yjs for current file
-      initializeYjsFile(currentFile.name, currentFile.content);
-      
-      // Request server state for this file
-      requestYjsState(currentFile.name);
-    }
-  }, [currentFile, fetchBlameData, initializeYjsFile, requestYjsState]);
+    const fileName = currentFile?.name;
+    if (!fileName) return;
+
+    fetchBlameData(fileName);
+
+    // Initialize Yjs for the active file once per file switch.
+    initializeYjsFile(fileName, currentFile?.content || '');
+
+    // Request authoritative server state for this file once per switch.
+    requestYjsState(fileName);
+  }, [currentFile?.name, fetchBlameData, initializeYjsFile, requestYjsState]);
 
   // Helper function to get time ago string
   const getTimeAgo = (date) => {
@@ -402,6 +503,213 @@ export default function EditorPage() {
     const months = Math.floor(days / 30);
     return `${months}mo ago`;
   };
+
+  const getStableCursorColor = useCallback((userId = 'anonymous') => {
+    const palette = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#10b981', '#06b6d4', '#3b82f6', '#6366f1', '#a855f7', '#ec4899'];
+    const source = String(userId);
+    let hash = 0;
+    for (let i = 0; i < source.length; i += 1) {
+      hash = ((hash << 5) - hash) + source.charCodeAt(i);
+      hash |= 0;
+    }
+    return palette[Math.abs(hash) % palette.length];
+  }, []);
+
+  const ensureRemoteCursorStyles = useCallback((styleKey, color, initial, userName) => {
+    if (remoteCursorStyleKeysRef.current.has(styleKey)) {
+      return;
+    }
+
+    const safeInitial = String(initial || 'U').replace(/[^A-Za-z0-9]/g, '').slice(0, 1).toUpperCase() || 'U';
+    const safeUserName = String(userName || 'User').replace(/['\\]/g, '');
+
+    const styleElement = document.createElement('style');
+    styleElement.id = `remote-cursor-style-${styleKey}`;
+    styleElement.textContent = `
+      .monaco-editor .remote-cursor-marker-${styleKey} {
+        border-left: 2px solid ${color};
+        margin-left: -1px;
+      }
+      .monaco-editor .remote-cursor-label-${styleKey} {
+        position: relative;
+        display: inline-block;
+        width: 0;
+        line-height: 0;
+        overflow: visible;
+        pointer-events: none;
+        z-index: 20;
+      }
+      .monaco-editor .remote-cursor-label-${styleKey}::after {
+        content: '${safeUserName}';
+        position: absolute;
+        left: 4px;
+        top: -1.5em;
+        display: inline-flex;
+        align-items: center;
+        background: ${color};
+        color: #ffffff;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 10px;
+        line-height: 1;
+        font-weight: 600;
+        white-space: nowrap;
+        opacity: 0.72;
+        transition: transform 90ms linear, opacity 120ms ease;
+        pointer-events: none;
+      }
+      .monaco-editor .glyph-margin .remote-cursor-glyph-${styleKey} {
+        position: relative;
+      }
+      .monaco-editor .glyph-margin .remote-cursor-glyph-${styleKey}::before {
+        content: '${safeInitial}';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: ${color};
+        color: #ffffff;
+        font-size: 9px;
+        font-weight: 700;
+        margin-left: 1px;
+        margin-top: 2px;
+        box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.95);
+      }
+    `;
+
+    document.head.appendChild(styleElement);
+    remoteCursorStyleKeysRef.current.add(styleKey);
+  }, []);
+
+  const renderRemoteCursors = useCallback(() => {
+    const editor = monacoEditorRef.current;
+    if (!editor || !monacoInstance || !currentFile?.name) {
+      if (editor) {
+        remoteCursorDecorationIdsRef.current = editor.deltaDecorations(remoteCursorDecorationIdsRef.current, []);
+      }
+      return;
+    }
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const cursorDecorations = [];
+    for (const cursorData of remoteCursorsRef.current.values()) {
+      if (!cursorData?.position || cursorData.position.fileName !== currentFile.name) {
+        continue;
+      }
+
+      const safeKey = String(cursorData.socketId || cursorData.userId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const color = cursorData.cursorColor || getStableCursorColor(cursorData.userId);
+      const initial = (cursorData.userName || 'U').trim().slice(0, 1).toUpperCase();
+      ensureRemoteCursorStyles(safeKey, color, initial, cursorData.userName || 'User');
+
+      const maxLine = model.getLineCount();
+      const lineNumber = Math.min(Math.max(1, Number(cursorData.position.lineNumber || 1)), maxLine);
+      const maxColumn = model.getLineMaxColumn(lineNumber);
+      const column = Math.min(Math.max(1, Number(cursorData.position.column || 1)), maxColumn);
+      const endColumn = column < maxColumn ? column + 1 : column;
+
+      cursorDecorations.push({
+        range: new monacoInstance.Range(lineNumber, column, lineNumber, endColumn),
+        options: {
+          className: `remote-cursor-marker-${safeKey}`,
+          glyphMarginClassName: `remote-cursor-glyph-${safeKey}`,
+          before: {
+            content: '\u200b',
+            inlineClassName: `remote-cursor-label-${safeKey}`,
+            cursorStops: monacoInstance.editor.InjectedTextCursorStops.None,
+          },
+          stickiness: monacoInstance.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      });
+    }
+
+    remoteCursorDecorationIdsRef.current = editor.deltaDecorations(remoteCursorDecorationIdsRef.current, cursorDecorations);
+  }, [currentFile, ensureRemoteCursorStyles, getStableCursorColor, monacoInstance]);
+
+  const emitCursorPosition = useCallback((position) => {
+    if (!socket || !projectId || !currentFile?.name || !position) return;
+
+    const payload = {
+      roomId: projectId,
+      fileName: currentFile.name,
+      position: {
+        lineNumber: Math.max(1, Number(position.lineNumber || 1)),
+        column: Math.max(1, Number(position.column || 1)),
+      },
+    };
+
+    const now = Date.now();
+    const minInterval = 35;
+    const elapsed = now - cursorBroadcastRef.current.lastSentAt;
+
+    if (elapsed >= minInterval) {
+      socket.emit('cursor-move', payload);
+      cursorBroadcastRef.current.lastSentAt = now;
+      return;
+    }
+
+    cursorBroadcastRef.current.pendingPayload = payload;
+    if (cursorBroadcastRef.current.timeoutId) return;
+
+    cursorBroadcastRef.current.timeoutId = setTimeout(() => {
+      if (cursorBroadcastRef.current.pendingPayload) {
+        socket.emit('cursor-move', cursorBroadcastRef.current.pendingPayload);
+        cursorBroadcastRef.current.lastSentAt = Date.now();
+      }
+      cursorBroadcastRef.current.pendingPayload = null;
+      cursorBroadcastRef.current.timeoutId = null;
+    }, minInterval - elapsed);
+  }, [socket, projectId, currentFile]);
+
+  useEffect(() => {
+    renderRemoteCursors();
+  }, [renderRemoteCursors]);
+
+  useEffect(() => {
+    const editor = monacoEditorRef.current;
+    if (!editor || !currentFile?.name) return;
+
+    const currentPosition = editor.getPosition();
+    if (currentPosition) {
+      emitCursorPosition(currentPosition);
+    }
+  }, [currentFile, emitCursorPosition]);
+
+  useEffect(() => {
+    return () => {
+      if (cursorBroadcastRef.current.timeoutId) {
+        clearTimeout(cursorBroadcastRef.current.timeoutId);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleRemoteCursorMoved = (data) => {
+      if (!data || !data.socketId || data.socketId === socket.id) return;
+      remoteCursorsRef.current.set(data.socketId, data);
+      renderRemoteCursors();
+    };
+
+    const handleRemoteCursorRemoved = (data) => {
+      if (!data?.socketId) return;
+      remoteCursorsRef.current.delete(data.socketId);
+      renderRemoteCursors();
+    };
+
+    socket.on('cursor-moved', handleRemoteCursorMoved);
+    socket.on('cursor-removed', handleRemoteCursorRemoved);
+
+    return () => {
+      socket.off('cursor-moved', handleRemoteCursorMoved);
+      socket.off('cursor-removed', handleRemoteCursorRemoved);
+    };
+  }, [socket, renderRemoteCursors]);
 
   // Join room when component mounts or socket reconnects
   useEffect(() => {
@@ -424,10 +732,56 @@ export default function EditorPage() {
       socket.on('connect', joinRoom);
 
       // Listen for room users updates
-      socket.on('room-users', (users) => {
-        console.log('Room users updated:', users);
-        setOnlineUsers(users);
-      });
+      const handleRoomUsers = (users) => {
+        const dedupedUsers = Array.from(
+          new Map(
+            (users || []).map((u) => [String(u?.userId || `socket:${u?.socketId || ''}`), u])
+          ).values()
+        );
+
+        console.log('Room users updated:', dedupedUsers);
+        setOnlineUsers(dedupedUsers);
+
+        const activeSocketIds = new Set((dedupedUsers || []).map((u) => u.socketId).filter(Boolean));
+        let changed = false;
+        for (const key of Array.from(remoteCursorsRef.current.keys())) {
+          if (!activeSocketIds.has(key)) {
+            remoteCursorsRef.current.delete(key);
+            changed = true;
+          }
+        }
+        if (changed) {
+          renderRemoteCursors();
+        }
+      };
+
+      const handleRoomState = (payload) => {
+        const incomingRoomFiles = sanitizeProjectFiles(payload?.codeState?.files || []);
+
+        // Guard against an early empty room-state replacing freshly loaded API state.
+        const isFirstRoomState = !roomStateHydratedRef.current;
+        roomStateHydratedRef.current = true;
+        if (isFirstRoomState && incomingRoomFiles.length === 0 && filesRef.current.length > 0) {
+          console.warn('[RoomState] Ignoring first empty room-state to preserve API-loaded files');
+          return;
+        }
+
+        const roomFiles = isFirstRoomState && apiFilesHydratedRef.current
+          ? mergeFilesPreservingSavedContent(incomingRoomFiles, filesRef.current)
+          : incomingRoomFiles;
+
+        setFiles(roomFiles);
+        setCurrentFile((prev) => {
+          if (prev) {
+            const stillExists = roomFiles.find((f) => f.name === prev.name || f.id === prev.id);
+            if (stillExists) return stillExists;
+          }
+          return roomFiles.find((f) => !f.name.endsWith('/')) || null;
+        });
+      };
+
+      socket.on('room-users', handleRoomUsers);
+      socket.on('room-state', handleRoomState);
 
       // Listen for join errors (access denied)
       socket.on('join-error', (data) => {
@@ -440,47 +794,55 @@ export default function EditorPage() {
 
       return () => {
         socket.off('connect', joinRoom);
-        socket.off('room-users');
+        socket.off('room-users', handleRoomUsers);
+        socket.off('room-state', handleRoomState);
         socket.off('join-error');
       };
     }
-  }, [socket, projectId, navigate]);
+  }, [socket, projectId, navigate, renderRemoteCursors, sanitizeProjectFiles, mergeFilesPreservingSavedContent]);
 
   const saveProject = async (updatedFiles) => {
-    // Always save to localStorage first
-    localStorage.setItem(`project_${projectId}`, JSON.stringify({
-      files: updatedFiles,
-      lastSync: new Date().toISOString()
-    }));
-    
     try {
-      const token = sessionStorage.getItem('token');
-      await axios.put(
-        `http://localhost:5000/api/projects/${projectId}`,
-        { files: updatedFiles },
-        {
-          headers: { Authorization: `Bearer ${token}` }
-        }
-      );
-      console.log('Project saved to server');
+      await persistProjectFiles(updatedFiles);
+      console.log('[Save] Project saved to server');
     } catch (err) {
-      console.error('Error saving project to server:', err);
-      console.log('File changes saved locally (will sync when server is available)');
+      console.error('[Save] Error saving project:', err?.response?.status, err?.message);
     }
   };
 
+  // Flush the pending debounced save immediately — called on file-switch and page hide
+  const flushPendingSave = useCallback(() => {
+    if (saveDebounceRef.current) {
+      clearTimeout(saveDebounceRef.current);
+      saveDebounceRef.current = null;
+    }
+    if (filesRef.current.length) {
+      saveProject(filesRef.current);
+    }
+  }, []);
+
   const handleCreateFile = useCallback((fileName) => {
+    const normalizedFileName = normalizePath(fileName);
+    if (!normalizedFileName) {
+      alert('File name cannot be empty.');
+      return;
+    }
+    if (normalizedFileName === '.gitkeep') {
+      alert('The file name .gitkeep is not allowed.');
+      return;
+    }
+
     // Check for duplicate file names
-    if (files.some(f => f.name === fileName)) {
-      alert(`File "${fileName}" already exists in this project.`);
+    if (files.some(f => f.name === normalizedFileName)) {
+      alert(`File "${normalizedFileName}" already exists in this project.`);
       return;
     }
 
     const newFile = {
       id: Date.now().toString(),
-      name: fileName,
-      content: getBoilerplate(fileName),
-      language: getLanguageFromExt(fileName)
+      name: normalizedFileName,
+      content: '',
+      language: getLanguageFromExt(normalizedFileName)
     };
     
     console.log('Creating file:', newFile);
@@ -505,29 +867,118 @@ export default function EditorPage() {
     
     // Save project with new file
     saveProject(updatedFiles);
-  }, [files, projectId, socket]);
+  }, [files, projectId, socket, normalizePath]);
 
-  const handleDeleteFile = useCallback((fileId) => {
-    const updatedFiles = files.filter(f => (f.id || f.name) !== fileId);
+  const handleSelectFile = useCallback((selectedFile) => {
+    if (!selectedFile) return;
+
+    const latestFile = filesRef.current.find(
+      (file) => file.name === selectedFile.name || file.id === selectedFile.id
+    ) || selectedFile;
+
+    const resolvedContent = fileContentMap[latestFile.name];
+    setCurrentFile({
+      ...latestFile,
+      content: typeof resolvedContent === 'string' ? resolvedContent : (latestFile.content || ''),
+    });
+  }, [fileContentMap]);
+
+  const handleDeleteFile = useCallback(async (targetPath) => {
+    const folderPath = normalizePath(targetPath);
+    if (!folderPath) {
+      alert('Delete path cannot be empty.');
+      return;
+    }
+    const folderPrefix = `${folderPath}/`;
+    const isFolderDelete = files.some(
+      (f) => f.name === folderPrefix || f.name.startsWith(folderPrefix)
+    );
+
+    const previousFiles = files;
+    const updatedFiles = isFolderDelete
+      ? files.filter(
+          (f) =>
+            f.name !== folderPrefix &&
+            !f.name.startsWith(folderPrefix)
+        )
+      : files.filter(f => normalizePath(f.name) !== folderPath && (f.id || f.name) !== folderPath);
+
+    // Optimistic UI update, rollback if server delete fails.
     setFiles(updatedFiles);
     
     // Clear current file if it was deleted
-    if (currentFile && (currentFile.id === fileId || currentFile.name === fileId)) {
-      setCurrentFile(updatedFiles.length > 0 ? updatedFiles[0] : null);
+    if (
+      currentFile &&
+      (
+        normalizePath(currentFile.name) === folderPath ||
+        (isFolderDelete && currentFile.name.startsWith(folderPrefix))
+      )
+    ) {
+      const nextEditableFile = updatedFiles.find((f) => !f.name.endsWith('/')) || null;
+      setCurrentFile(nextEditableFile);
     }
     
-    // Emit file deletion event to collaborators
-    if (socket && projectId) {
-      socket.emit('file-deleted', {
-        roomId: projectId,
-        fileId: fileId,
-        deletedBy: JSON.parse(sessionStorage.getItem('user') || '{}').name
+    try {
+      const token = sessionStorage.getItem('token');
+      const endpoint = isFolderDelete
+        ? `http://localhost:5000/api/projects/${projectId}/folders`
+        : `http://localhost:5000/api/projects/${projectId}/files`;
+      const response = await axios.delete(endpoint, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { path: folderPath },
       });
+
+      // Server is authoritative; use persisted file list returned by API.
+      const persistedFiles = sanitizeProjectFiles(response?.data?.files || []);
+      setFiles(persistedFiles);
+      setCurrentFile((prev) => {
+        if (!prev) return persistedFiles.find((f) => !f.name.endsWith('/')) || null;
+        const stillExists = persistedFiles.find((f) => f.name === prev.name || f.id === prev.id);
+        return stillExists || persistedFiles.find((f) => !f.name.endsWith('/')) || null;
+      });
+
+      // Emit deletion event to collaborators only after server confirmed persistence.
+      if (socket && projectId) {
+        socket.emit(isFolderDelete ? 'deleteFolder' : 'deleteFile', {
+          roomId: projectId,
+          path: folderPath,
+          deletedBy: JSON.parse(sessionStorage.getItem('user') || '{}').name
+        });
+      }
+    } catch (err) {
+      console.error('Failed to permanently delete path:', err);
+
+      // Compatibility fallback: if dedicated delete routes are unavailable,
+      // persist deletion through the general project save endpoint.
+      const status = err?.response?.status;
+      if (status === 404 || status === 405) {
+        try {
+          await saveProject(updatedFiles);
+
+          if (socket && projectId) {
+            socket.emit(isFolderDelete ? 'deleteFolder' : 'deleteFile', {
+              roomId: projectId,
+              path: folderPath,
+              deletedBy: JSON.parse(sessionStorage.getItem('user') || '{}').name
+            });
+          }
+
+          console.warn('[Delete] Fallback persistence used via PUT /api/projects/:id');
+          return;
+        } catch (fallbackErr) {
+          console.error('[Delete] Fallback persistence failed:', fallbackErr);
+        }
+      }
+
+      // Rollback optimistic update only when all persistence paths fail.
+      setFiles(previousFiles);
+      setCurrentFile((prev) => {
+        if (prev) return prev;
+        return previousFiles.find((f) => !f.name.endsWith('/')) || null;
+      });
+      alert(err?.response?.data?.error || 'Delete failed on server.');
     }
-    
-    // Save project with deleted file
-    saveProject(updatedFiles);
-  }, [files, currentFile, projectId, socket]);
+  }, [files, currentFile, projectId, socket, normalizePath, sanitizeProjectFiles]);
 
   const handleSaveFile = useCallback((file) => {
     // Save the current state of files to server and localStorage
@@ -538,23 +989,49 @@ export default function EditorPage() {
   }, [files]);
 
   const handleCreateFolder = useCallback((folderPath) => {
-    // Create a folder by adding a placeholder file
-    // In a real file system, folders exist implicitly when files are created in them
-    // For now, we'll create a .gitkeep file in the folder
-    const placeholderFile = {
+    const normalizedFolder = normalizePath(folderPath);
+    if (!normalizedFolder) {
+      alert('Folder name cannot be empty.');
+      return;
+    }
+    if (normalizedFolder === '.gitkeep') {
+      alert('The folder name .gitkeep is not allowed.');
+      return;
+    }
+    const folderMarker = `${normalizedFolder}/`;
+
+    if (
+      files.some(
+        (f) => f.name === folderMarker || f.name.startsWith(folderMarker)
+      )
+    ) {
+      alert(`Folder "${normalizedFolder}" already exists.`);
+      return;
+    }
+
+    const folderEntry = {
       id: Date.now().toString(),
-      name: `${folderPath}/.gitkeep`,
-      content: '# Folder placeholder',
-      language: 'markdown'
+      name: folderMarker,
+      content: '',
+      language: 'plaintext'
     };
-    
-    console.log('Creating folder:', folderPath);
-    const updatedFiles = [...files, placeholderFile];
+
+    const updatedFiles = [...files, folderEntry];
     setFiles(updatedFiles);
-    
-    // Save project with new folder
+
+    if (socket && projectId) {
+      socket.emit('code-change', {
+        roomId: projectId,
+        fileId: folderEntry.id,
+        fileName: folderEntry.name,
+        content: '',
+        language: folderEntry.language,
+        isNewFile: true
+      });
+    }
+
     saveProject(updatedFiles);
-  }, [files, projectId, socket]);
+  }, [files, projectId, socket, normalizePath]);
 
   const handleRenameFile = useCallback((oldPath, newPath) => {
     // Check if new path already exists
@@ -568,6 +1045,9 @@ export default function EditorPage() {
       if (file.name === oldPath) {
         // Direct file rename
         return { ...file, name: newPath, language: getLanguageFromExt(newPath) };
+      } else if (file.name === `${oldPath}/`) {
+        // Folder marker rename
+        return { ...file, name: `${newPath}/`, content: '', language: 'plaintext' };
       } else if (file.name.startsWith(oldPath + '/')) {
         // File inside renamed folder
         const newName = newPath + file.name.substring(oldPath.length);
@@ -601,6 +1081,17 @@ export default function EditorPage() {
       const model = editor.getModel();
       
       if (model) {
+        const currentContent = model.getValue();
+        if (currentContent === newContent) {
+          return; // No change needed
+        }
+
+        // Only apply if user is not actively typing
+        if (isTyping.current) {
+          console.log('[Apply] User typing, skipping remote update for now');
+          return;
+        }
+
         // Set flag to prevent onChange from processing this change
         isApplyingRemoteChange.current = true;
         
@@ -613,10 +1104,8 @@ export default function EditorPage() {
           prevFiles.map(f => f.name === currentFile.name ? { ...f, content: newContent } : f)
         );
         
-        // Reset flag after a short delay
-        setTimeout(() => {
-          isApplyingRemoteChange.current = false;
-        }, 100);
+        // Reset flag immediately since we're not in a remote handler context
+        isApplyingRemoteChange.current = false;
       }
     } else {
       // Fallback if editor not available
@@ -627,12 +1116,17 @@ export default function EditorPage() {
     }
   }, [currentFile]);
 
-  const handleCodeChange = useCallback((value) => {
+  const handleCodeChange = useCallback((value, changedLines = []) => {
     if (userRole === 'viewer') return;
     if (!currentFile) return;
+    if (typeof value !== 'string') return;
     
     // Ignore if this change is from a remote update
     if (isApplyingRemoteChange.current) {
+      return;
+    }
+
+    if (isInitialLoad.current) {
       return;
     }
 
@@ -666,10 +1160,52 @@ export default function EditorPage() {
     );
     
     // Sync with Yjs (debounced)
+    // Debounced direct HTTP save — socket-independent, guarantees persistence.
+    // 2 seconds after the last keystroke the full file list is written to DB.
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(() => {
+      // Build the up-to-date list using filesRef so no stale content is used
+      const latestFiles = filesRef.current.map(f =>
+        f.name === currentFile.name ? { ...f, content: value } : f
+      );
+      saveProject(latestFiles);
+      saveDebounceRef.current = null;
+    }, 2000);
+
     if (socket && projectId) {
       syncYjsChange(currentFile.name, value);
+
+      // Periodically emit content snapshot so insert/delete/replace operations
+      // stay synchronized across collaborators.
+      fallbackSyncRef.current.pendingPayload = {
+        roomId: projectId,
+        fileId: currentFile.id || currentFile.name,
+        fileName: currentFile.name,
+        content: value,
+        language: currentFile.language || 'javascript',
+        changedLines,
+        isFallbackSync: false,
+      };
+
+      if (!fallbackSyncRef.current.timeoutId) {
+        fallbackSyncRef.current.timeoutId = setTimeout(() => {
+          if (fallbackSyncRef.current.pendingPayload) {
+            socket.emit('code-change', fallbackSyncRef.current.pendingPayload);
+          }
+          fallbackSyncRef.current.pendingPayload = null;
+          fallbackSyncRef.current.timeoutId = null;
+        }, 180);
+      }
     }
   }, [currentFile, socket, projectId, syncYjsChange, userRole]);
+
+  useEffect(() => {
+    return () => {
+      if (fallbackSyncRef.current.timeoutId) {
+        clearTimeout(fallbackSyncRef.current.timeoutId);
+      }
+    };
+  }, []);
 
   // Handle: Check if code likely requires input
   const codeRequiresInput = (code, language) => {
@@ -703,6 +1239,8 @@ export default function EditorPage() {
     }
     if (userRole === 'viewer') {
       setExecutionOutput('View-only role cannot execute code.');
+      setCompileError('');
+      setRuntimeError('');
       return;
     }
 
@@ -714,6 +1252,8 @@ export default function EditorPage() {
       setIsExecuting(false);
       setWaitingForInput(true);
       setExecutionOutput('');
+      setCompileError('');
+      setRuntimeError('');
       return;
     }
 
@@ -721,6 +1261,8 @@ export default function EditorPage() {
     setIsExecuting(true);
     setWaitingForInput(false);
     setExecutionOutput('');
+    setCompileError('');
+    setRuntimeError('');
 
     console.log('Executing code:', {
       language: currentFile.language,
@@ -733,9 +1275,18 @@ export default function EditorPage() {
       roomId: projectId,
       code: currentFile.content || '',
       language: currentFile.language || 'javascript',
-      input: executionInput
+      input: executionInput,
+      activeFileName: currentFile.name,
+      entryFileName: currentFile.name,
+      files: files
+        .filter((file) => file && !String(file.name || '').endsWith('/'))
+        .map((file) => ({
+          name: file.name,
+          content: file.content || '',
+          language: file.language || getLanguageFromExt(file.name),
+        }))
     });
-  }, [currentFile, socket, projectId, executionInput, userRole]);
+  }, [currentFile, socket, projectId, executionInput, userRole, files]);
 
   // Listen for execution results
   React.useEffect(() => {
@@ -743,13 +1294,12 @@ export default function EditorPage() {
     
     const handleExecutionResult = (data) => {
       console.log('[Execution] Result received:', data);
-      
-      // Normal success - show output
-      const output = `OUTPUT:\n${data.output || '(no output)'}\n\nExecution Time: ${data.executionTime}ms`;
-      setExecutionOutput(output);
+      setExecutionOutput(data.output || '');
+      setCompileError(data.compileError || '');
+      setRuntimeError(data.runtimeError || '');
       setIsExecuting(false);
       setWaitingForInput(false);
-      setExecutionInput(''); // Clear input after execution
+      setExecutionInput('');
       setAnalytics(prev => ({
         ...prev,
         totalRuns: prev.totalRuns + 1,
@@ -760,17 +1310,12 @@ export default function EditorPage() {
 
     const handleExecutionError = (data) => {
       console.log('[Execution] Error received:', data);
-      // Show both error and any output that was produced
-      let errorMessage = `ERROR:\n${data.error || 'Unknown error occurred'}`;
-      if (data.output) {
-        errorMessage += `\n\nOutput before error:\n${data.output}`;
-      }
-      setExecutionOutput(errorMessage);
+      setExecutionOutput(data.output || '');
+      setCompileError(data.compileError || '');
+      setRuntimeError(data.runtimeError || data.error || '');
       setIsExecuting(false);
       setWaitingForInput(false);
-      setExecutionInput(''); // Clear input after error
-      
-      // Track failed run
+      setExecutionInput('');
       setAnalytics(prev => ({
         ...prev,
         totalRuns: prev.totalRuns + 1,
@@ -814,27 +1359,75 @@ export default function EditorPage() {
 
     // Handle new file creation from other users
     const handleCodeChanged = (data) => {
-      // Only handle new file creation (Yjs handles all content sync)
+      if (isInitialLoad.current) {
+        return;
+      }
+
+      if (!data.isNewFile) {
+        const incomingName = data.fileName || data.fileId;
+        if (!incomingName) return;
+
+        if (typeof data.content !== 'string') return;
+
+        if (currentFile?.name === incomingName) {
+          // Don't apply remote update if user is actively typing on this file
+          if (isTyping.current) {
+            console.log('[Socket] User is typing, queueing code-changed update');
+            pendingRemoteUpdate.current = { fileName: incomingName, content: data.content };
+            return;
+          }
+
+          if (currentFile.content !== data.content) {
+            applyRemoteUpdate(data.content);
+          }
+        } else {
+          setFiles(prevFiles =>
+            prevFiles.map(f =>
+              (f.name === incomingName || f.id === data.fileId)
+                ? { ...f, content: data.content }
+                : f
+            )
+          );
+        }
+        return;
+      }
+
+      // Handle new file creation - ensure no duplicates
       if (data.isNewFile) {
-        console.log('[Real-time] New file created by collaborator:', data.fileName);
+        console.log('[Real-time] New file created:', {
+          fileId: data.fileId,
+          fileName: data.fileName,
+          creator: data.modifiedBy
+        });
         
         setFiles(prevFiles => {
-          const fileExists = prevFiles.some(f => f.id === data.fileId || f.name === data.fileName);
+          // Check for existing file by both ID and name
+          const fileExists = prevFiles.some(f => 
+            (f.id && f.id === data.fileId) || 
+            (f.name === data.fileName)
+          );
+          
           if (!fileExists) {
             const newFile = {
               id: data.fileId,
               name: data.fileName || 'Untitled',
-              content: data.content || '',
+              content: typeof data.content === 'string' ? data.content : '',
               language: data.language || 'javascript'
             };
             
-            // Initialize Yjs for the new file
-            initializeYjsFile(newFile.name, newFile.content);
-            requestYjsState(newFile.name);
+            console.log('[Real-time] Adding new file to state:', newFile.name);
+            
+            if (!newFile.name.endsWith('/')) {
+              // Initialize Yjs for the new file
+              initializeYjsFile(newFile.name, newFile.content);
+              requestYjsState(newFile.name);
+            }
             
             return [...prevFiles, newFile];
+          } else {
+            console.log('[Real-time] File already exists, skipping duplicate:', data.fileName);
+            return prevFiles;
           }
-          return prevFiles;
         });
       }
     };
@@ -845,17 +1438,20 @@ export default function EditorPage() {
     const handleYjsState = (data) => {
       console.log('[Yjs] Received state for file:', data.fileName);
       const { fileName, state } = data;
-      
-      // Initialize Yjs doc with received state
-      if (!yDocs.current.has(fileName)) {
-        const ydoc = new Y.Doc();
-        Y.applyUpdate(ydoc, new Uint8Array(state));
-        
-        const ytext = ydoc.getText('shared-text');
-        yDocs.current.set(fileName, ydoc);
-        yTexts.current.set(fileName, ytext);
-        
-          console.log('[Yjs] Initialized Yjs document for:', fileName, 'Content:', ytext.toString());
+
+      const ydoc = new Y.Doc();
+      Y.applyUpdate(ydoc, new Uint8Array(state));
+
+      const ytext = ydoc.getText('shared-text');
+      yDocs.current.set(fileName, ydoc);
+      yTexts.current.set(fileName, ytext);
+
+      const syncedText = ytext.toString();
+      setFiles((prevFiles) =>
+        prevFiles.map((f) => (f.name === fileName ? { ...f, content: syncedText } : f))
+      );
+      if (currentFile?.name === fileName) {
+        applyRemoteUpdate(syncedText);
       }
     };
 
@@ -921,7 +1517,6 @@ export default function EditorPage() {
       }, 5000);
     };
 
-    socket.on('code-changed', handleCodeChanged);
     socket.on('edit-conflict', handleConflict);
 
     return () => {
@@ -930,23 +1525,51 @@ export default function EditorPage() {
       socket.off('yjs-state', handleYjsState);
       socket.off('yjs-sync', handleYjsSync);
     };
-  }, [socket, currentFile, syncYjsChange, initializeYjsFile, requestYjsState]);
+  }, [socket, currentFile, syncYjsChange, initializeYjsFile, requestYjsState, applyRemoteUpdate, showYjsSyncNotification]);
 
   // File deletion handler
   useEffect(() => {
     if (!socket || !projectId) return;
 
     const handleFileDeleted = (data) => {
+      const deletedPath = normalizePath(data.path || data.fileId);
+      if (!deletedPath) return;
+      const deleteType = data.type === 'folder' ? 'folder' : 'file';
+
       console.log('[Real-time] File deleted from collaborator:', {
-        fileId: data.fileId,
-        deletedBy: data.deletedBy
+        fileId: deletedPath,
+        type: deleteType,
+        deletedBy: data.deletedBy,
+        timestamp: data.timestamp
       });
 
-      setFiles(prevFiles => prevFiles.filter(f => f.id !== data.fileId));
+      setFiles(prevFiles => {
+        const folderPath = deletedPath;
+        const folderPrefix = `${folderPath}/`;
+        
+        // Filter out deleted file and any files within deleted folder
+        const updated = prevFiles.filter(f => {
+          const normalizedName = normalizePath(f.name);
+          if (normalizedName === folderPath || f.id === folderPath) return false;
+          if (deleteType === 'folder' && normalizedName.startsWith(folderPrefix)) return false;
+          return true;
+        });
+        
+        console.log(`[Real-time] Files after deletion: ${updated.length} files remain`);
+        return updated;
+      });
 
       // Clear current file if it was deleted
       setCurrentFile(prev => {
-        if (prev && prev.id === data.fileId) {
+        if (!prev) return null;
+        
+        const folderPath = deletedPath;
+        const folderPrefix = `${folderPath}/`;
+        
+        const normalizedCurrent = normalizePath(prev.name);
+        if (normalizedCurrent === folderPath ||
+            (deleteType === 'folder' && normalizedCurrent.startsWith(folderPrefix))) {
+          console.log('[Real-time] Current file was deleted, clearing selection');
           return null;
         }
         return prev;
@@ -956,123 +1579,70 @@ export default function EditorPage() {
     socket.on('file-deleted-remote', handleFileDeleted);
 
     return () => {
-      socket.off('file-deleted-remote');
+      socket.off('file-deleted-remote', handleFileDeleted);
     };
   }, [socket, projectId]);
 
-  // Auto-save to localStorage every 5 seconds and to server every 30 seconds
+  // Auto-save safety-net every 10 seconds.
+  // IMPORTANT: depends only on projectId so the interval is NEVER restarted by keystrokes.
+  // Uses filesRef (always current) instead of the files closure value.
   React.useEffect(() => {
-    const autoSaveLocal = setInterval(() => {
-      localStorage.setItem(`project_${projectId}`, JSON.stringify({
-        name: projectName,
-        files: files,
-        lastSync: new Date().toISOString()
-      }));
-      console.log('[Auto-save] Saved to localStorage');
-    }, 5000); // Every 5 seconds
-
     const autoSaveServer = setInterval(() => {
-      if (files.length > 0) {
-        const token = sessionStorage.getItem('token');
-        axios.put(
-          `http://localhost:5000/api/projects/${projectId}`,
-          { files: files },
-          { headers: { Authorization: `Bearer ${token}` } }
-        ).then(() => {
-          console.log('[Auto-save] Synced to server');
-        }).catch(err => {
-          console.log('[Auto-save] Server sync failed (will retry):', err.message);
+      if (!filesRef.current.length) return;
+      persistProjectFiles(filesRef.current).then(() => {
+        console.log('[Auto-save] Synced to server');
+      }).catch(err => {
+        console.log('[Auto-save] Server sync failed (will retry):', err.message);
+      });
+    }, 10000); // Every 10 seconds — stable, never restarted by typing
+
+    return () => clearInterval(autoSaveServer);
+  }, [persistProjectFiles]); // intentionally excludes files — uses filesRef instead
+
+  // Save immediately when the user switches to a different file
+  const prevFileNameRef = useRef(null);
+  useEffect(() => {
+    const prev = prevFileNameRef.current;
+    const current = currentFile?.name || null;
+    if (prev && prev !== current) {
+      // User just switched away from a file — flush any pending save immediately
+      flushPendingSave();
+    }
+    prevFileNameRef.current = current;
+  }, [currentFile?.name, flushPendingSave]);
+
+  // Save when the browser tab loses visibility (user refreshes, switches tabs, closes)
+  useEffect(() => {
+    const handleHide = () => {
+      if (document.visibilityState === 'hidden' && filesRef.current.length) {
+        if (saveDebounceRef.current) {
+          clearTimeout(saveDebounceRef.current);
+          saveDebounceRef.current = null;
+        }
+        persistProjectFiles(filesRef.current, { keepalive: true }).catch((err) => {
+          console.error('[Save] Keepalive visibility save failed:', err?.message || err);
         });
       }
-    }, 30000); // Every 30 seconds
-
-    return () => {
-      clearInterval(autoSaveLocal);
-      clearInterval(autoSaveServer);
     };
-  }, [projectId, files, projectName]);
+    document.addEventListener('visibilitychange', handleHide);
+    return () => document.removeEventListener('visibilitychange', handleHide);
+  }, [persistProjectFiles]);
 
-  // Recording timer
-  React.useEffect(() => {
-    let timer;
-    if (isRecording && recordingStartTime) {
-      timer = setInterval(() => {
-        setRecordingDuration(Math.floor((Date.now() - recordingStartTime) / 1000));
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!filesRef.current.length) return;
+
+      if (saveDebounceRef.current) {
+        clearTimeout(saveDebounceRef.current);
+        saveDebounceRef.current = null;
+      }
+
+      persistProjectFiles(filesRef.current, { keepalive: true }).catch(() => {});
     };
-  }, [isRecording, recordingStartTime]);
 
-  const handleStartRecording = async () => {
-    try {
-      const token = sessionStorage.getItem('token');
-      const response = await axios.post(
-        `http://localhost:5000/api/recordings/${projectId}/start`,
-        { title: `Session Recording - ${new Date().toLocaleString()}` },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      
-      setIsRecording(true);
-      setRecordingStartTime(Date.now());
-      setRecordingDuration(0);
-      
-      // Store recording ID for later stopping
-      localStorage.setItem('currentRecordingId', response.data.id);
-      
-      // Notify room that recording started
-      if (socket) {
-        socket.emit('recording-started', { roomId: projectId });
-      }
-      
-      console.log('Recording started:', response.data.id);
-    } catch (error) {
-      console.error('Failed to start recording:', error);
-      alert('Failed to start recording: ' + (error.response?.data?.error || error.message));
-    }
-  };
-
-  const handleStopRecording = async () => {
-    try {
-      const recordingId = localStorage.getItem('currentRecordingId');
-      if (!recordingId) {
-        alert('Recording session not found');
-        return;
-      }
-      
-      const token = sessionStorage.getItem('token');
-      const response = await axios.post(
-        `http://localhost:5000/api/recordings/${projectId}/stop/${recordingId}`,
-        { size: recordingDuration * 1024 }, // Estimate: ~1KB per second
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      
-      setIsRecording(false);
-      const duration = recordingDuration;
-      setRecordingStartTime(null);
-      setRecordingDuration(0);
-      
-      localStorage.removeItem('currentRecordingId');
-      
-      // Notify room that recording stopped
-      if (socket) {
-        socket.emit('recording-stopped', { roomId: projectId, duration });
-      }
-      
-      console.log('Recording stopped:', response.data);
-      alert(`Recording saved! Duration: ${Math.floor(duration / 60)}m ${duration % 60}s`);
-    } catch (error) {
-      console.error('Failed to stop recording:', error);
-      alert('Failed to stop recording: ' + (error.response?.data?.error || error.message));
-    }
-  };
-
-  const formatRecordingTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [persistProjectFiles]);
 
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100">
@@ -1149,18 +1719,6 @@ export default function EditorPage() {
         <div className="flex-1"></div>
         
         <button 
-          onClick={() => setSidebarTab('recordings')}
-          className={`p-3 rounded-lg transition-all ${
-            sidebarTab === 'recordings'
-              ? 'bg-blue-600 text-white'
-              : 'text-gray-400 hover:text-white hover:bg-gray-800'
-          }`}
-          title="Recordings"
-        >
-          <Video size={20} />
-        </button>
-        
-        <button 
           onClick={() => setSidebarTab('settings')}
           className={`p-3 rounded-lg transition-all ${
             sidebarTab === 'settings'
@@ -1186,7 +1744,6 @@ export default function EditorPage() {
               {sidebarTab === 'analytics' && 'Analytics'}
               {sidebarTab === 'export' && 'Export Project'}
               {sidebarTab === 'settings' && 'Settings'}
-              {sidebarTab === 'recordings' && 'Recordings'}
             </h2>
             <p className="text-xs text-gray-400 mt-1">
               {sidebarTab === 'files' && `${files.length} file${files.length !== 1 ? 's' : ''}`}
@@ -1195,7 +1752,6 @@ export default function EditorPage() {
               {sidebarTab === 'analytics' && 'Project insights'}
               {sidebarTab === 'export' && 'Export your work'}
               {sidebarTab === 'settings' && 'Manage users and permissions'}
-              {sidebarTab === 'recordings' && 'View and manage recordings'}
             </p>
           </div>
 
@@ -1206,7 +1762,7 @@ export default function EditorPage() {
                 <FileTree
                   files={files}
                   currentFile={currentFile}
-                  onSelectFile={setCurrentFile}
+                  onSelectFile={handleSelectFile}
                   onCreateFile={handleCreateFile}
                   onDeleteFile={handleDeleteFile}
                   onSaveFile={handleSaveFile}
@@ -1216,8 +1772,19 @@ export default function EditorPage() {
               </div>
             )}
             {sidebarTab === 'git' && (
-              <div className="flex-1 overflow-auto">
-                <GitControl projectId={projectId} />
+              <div className="flex-1 overflow-auto flex flex-col">
+                {userRole === 'admin' && (
+                  <div className="px-3 pt-3 pb-1">
+                    <button
+                      onClick={() => setShowImportModal(true)}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs rounded border border-gray-700 transition"
+                    >
+                      <GitBranch size={13} />
+                      Import from GitHub
+                    </button>
+                  </div>
+                )}
+                <GitControl projectId={projectId} onFilesChanged={handleFilesFromPull} />
               </div>
             )}
             {sidebarTab === 'chat' && (
@@ -1247,11 +1814,6 @@ export default function EditorPage() {
                   projectId={projectId}
                   onClose={() => setSidebarTab('files')}
                 />
-              </div>
-            )}
-            {sidebarTab === 'recordings' && (
-              <div className="flex-1 overflow-auto">
-                <Recordings projectId={projectId} />
               </div>
             )}
           </div>
@@ -1296,40 +1858,6 @@ export default function EditorPage() {
             )}
             
             <div className="flex items-center gap-3">
-              {/* Recording Indicator */}
-              {isRecording && (
-                <div className="flex items-center gap-2 px-4 py-2 bg-red-950 border border-red-800 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Circle size={12} className="text-red-500 fill-red-500 animate-pulse" />
-                    <span className="text-red-400 text-sm font-medium">REC</span>
-                  </div>
-                  <span className="text-white text-sm font-mono">
-                    {formatRecordingTime(recordingDuration)}
-                  </span>
-                </div>
-              )}
-              
-              {/* Record Button */}
-              <button
-                onClick={isRecording ? handleStopRecording : handleStartRecording}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all shadow-lg hover:shadow-xl ${
-                  isRecording
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-purple-600 hover:bg-purple-700 text-white'
-                }`}
-                title={isRecording ? 'Stop recording' : 'Start recording session'}
-              >
-                {isRecording ? (
-                  <>
-                    <Square size={16} /> Stop
-                  </>
-                ) : (
-                  <>
-                    <Circle size={16} /> Record
-                  </>
-                )}
-              </button>
-              
               {/* Invite Users Button - Admin Only */}
               {userRole === 'admin' && (
                 <button
@@ -1402,15 +1930,52 @@ export default function EditorPage() {
                   height="100%"
                   language={currentFile.language}
                   defaultValue={currentFile.content}
-                  onChange={handleCodeChange}
                   onMount={(editor, monaco) => {
                     setEditorInstance(editor);
                     setMonacoInstance(monaco);
                     monacoEditorRef.current = editor; // Store editor ref for remote updates
+
+                    editor.setValue(currentFile?.content || '');
+                    editorValueRef.current = currentFile?.content || '';
+
+                    // Reset initial load flag immediately so first keystroke is not blocked
+                    isInitialLoad.current = false;
+
+                    // Share local cursor movement with collaborators.
+                    editor.onDidChangeCursorPosition((event) => {
+                      emitCursorPosition(event.position);
+                    });
+
+                    const initialPosition = editor.getPosition();
+                    if (initialPosition) {
+                      emitCursorPosition(initialPosition);
+                    }
                     
                     // Track changes for blame
                     editor.onDidChangeModelContent((e) => {
                       if (!currentFile) return;
+
+                      const changedLineNumbers = Array.from(new Set(
+                        e.changes.flatMap((change) => {
+                          const insertedLineCount = String(change.text || '').split('\n').length - 1;
+                          const endLineNumber = Math.max(
+                            change.range.endLineNumber,
+                            change.range.startLineNumber + insertedLineCount
+                          );
+
+                          return Array.from(
+                            { length: (endLineNumber - change.range.startLineNumber) + 1 },
+                            (_, index) => change.range.startLineNumber + index
+                          );
+                        })
+                      ));
+
+                      handleCodeChange(editor.getValue(), changedLineNumbers);
+
+                      const currentPosition = editor.getPosition();
+                      if (currentPosition) {
+                        emitCursorPosition(currentPosition);
+                      }
                       
                       e.changes.forEach(change => {
                         const lineNumber = change.range.startLineNumber;
@@ -1441,7 +2006,15 @@ export default function EditorPage() {
                     smoothScrolling: true,
                     glyphMargin: true,
                     lineDecorationsWidth: 10,
-                    readOnly: userRole === 'viewer'
+                    readOnly: userRole === 'viewer',
+                    // Ensure editing is always allowed for non-viewers
+                    domReadOnly: false,
+                    // Prevent cursor jumping on selection updates
+                    selectionClipboard: true,
+                    // Allow paste without restrictions
+                    pasteAsPlaintext: false,
+                    // Smooth undo/redo
+                    wordBasedSuggestions: true
                   }}
                 />
               ) : (
@@ -1473,7 +2046,7 @@ export default function EditorPage() {
             <div className="flex flex-col h-40 p-3 gap-2">
               {/* Terminal Output */}
               <div className={waitingForInput ? "flex-1 min-h-0" : "flex-1 min-h-0"}>
-                <Console output={executionOutput} input={executionInput} isExecuting={isExecuting} />
+                <Console output={executionOutput} compileError={compileError} runtimeError={runtimeError} input={executionInput} isExecuting={isExecuting} />
               </div>
 
               {/* Terminal Input - Only show when waiting for input */}
@@ -1528,6 +2101,15 @@ export default function EditorPage() {
           socket={socket}
         />
       )}
+
+      {/* Import from GitHub Modal */}
+      {showImportModal && (
+        <ImportRepoModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onImported={({ projectId: newPid }) => navigate(`/editor/${newPid}`)}
+        />
+      )}
     </div>
   );
 }
@@ -1551,19 +2133,4 @@ function getLanguageFromExt(fileName) {
     'md': 'markdown'
   };
   return extensions[ext] || 'plaintext';
-}
-
-function getBoilerplate(fileName) {
-  const language = getLanguageFromExt(fileName);
-  const boilerplates = {
-    'javascript': `// ${fileName}\nconsole.log("Hello, World!");`,
-    'python': `# ${fileName}\nprint("Hello, World!")`,
-    'java': `public class ${fileName.split('.')[0]} {\n  public static void main(String[] args) {\n    System.out.println("Hello, World!");\n  }\n}`,
-    'cpp': `#include <iostream>\nusing namespace std;\n\nint main() {\n  cout << "Hello, World!" << endl;\n  return 0;\n}`,
-    'csharp': `using System;\n\nclass Program {\n  static void Main() {\n    Console.WriteLine("Hello, World!");\n  }\n}`,
-    'html': `<!DOCTYPE html>\n<html>\n<head>\n  <title>${fileName}</title>\n</head>\n<body>\n  <h1>Hello, World!</h1>\n</body>\n</html>`,
-    'css': `/* ${fileName} */\nbody {\n  font-family: Arial, sans-serif;\n}`,
-    'json': `{\n  "name": "example",\n  "version": "1.0.0"\n}`,
-  };
-  return boilerplates[language] || `// ${fileName}\n`;
 }

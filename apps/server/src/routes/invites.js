@@ -9,12 +9,20 @@ const User = require('../models/User');
  * POST /api/invites/send
  * Admin sends invite to user
  * Requires: Authentication
- * Body: { roomId, userIdentifier } - userIdentifier can be email or username
+ * Body: { roomId, userIdentifier, role } - userIdentifier can be email or username
+ * role defaults to 'editor' if not provided (can be 'viewer', 'editor')
  */
 router.post('/send', auth, async (req, res) => {
   try {
-    const { roomId, userIdentifier } = req.body;
+    const { roomId, userIdentifier, role = 'editor' } = req.body;
     const adminId = req.user.userId;
+    
+    // Validate role
+    if (!['viewer', 'editor'].includes(role)) {
+      return res.status(400).json({ 
+        error: 'Invalid role. Must be "viewer" or "editor"' 
+      });
+    }
 
     console.log('[Invite] Incoming send request', {
       roomId,
@@ -68,11 +76,12 @@ router.post('/send', auth, async (req, res) => {
       return res.status(400).json({ error: 'User already has a pending invite' });
     }
 
-    // Create invite
+    // Create invite with role
     const invite = new RoomInvite({
       roomId,
       invitedBy: adminId,
-      invitedUser: user._id
+      invitedUser: user._id,
+      role
     });
 
     await invite.save();
@@ -90,6 +99,7 @@ router.post('/send', auth, async (req, res) => {
         userId: user._id.toString(),
         userName: user.name,
         userEmail: user.email,
+        role: invite.role,
         expiresAt: invite.expiresAt
       }
     });
@@ -257,7 +267,7 @@ router.post('/validate-room-id', auth, async (req, res) => {
         userId: userId,
         email: user.email,
         name: user.name,
-        role: 'editor',
+        role: invite.role, // Use role from invite
         joinedAt: new Date()
       });
       await room.save();

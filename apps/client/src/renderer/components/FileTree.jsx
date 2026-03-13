@@ -6,7 +6,7 @@ import {
   Folder, 
   FolderOpen,
   Trash2, 
-  Save,
+  Pencil,
   FilePlus,
   FolderPlus
 } from 'lucide-react';
@@ -16,11 +16,20 @@ function buildFileTree(files) {
   const root = { name: 'root', type: 'folder', children: {}, path: '' };
   
   files.forEach(file => {
-    const parts = file.name.split('/');
+    // A trailing slash means this entry is a folder marker (not a real file)
+    const isFolderMarker = file.name.endsWith('/');
+    const parts = file.name.split('/').filter(p => p !== '');
+    if (parts.length === 0) return; // skip degenerate entries
+    
     let current = root;
     
     parts.forEach((part, index) => {
-      const isFile = index === parts.length - 1;
+      const isLast = index === parts.length - 1;
+      // A part is a file only if it's the last segment AND the entry is not a folder marker
+      const isFile = isLast && !isFolderMarker;
+      
+      // Skip .gitkeep files — they are internal folder-existence markers, not real files
+      if (isFile && part === '.gitkeep') return;
       
       if (!current.children[part]) {
         current.children[part] = {
@@ -48,7 +57,7 @@ function TreeNode({
   currentFile, 
   onSelectFile, 
   onDeleteFile, 
-  onSaveFile,
+  onRenameFile,
   expanded,
   toggleExpand,
   onNewFileInFolder,
@@ -61,23 +70,30 @@ function TreeNode({
       <div
         onClick={() => onSelectFile(node.fileData)}
         className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer rounded transition group ${
-          isSelected ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+          isSelected ? 'file-tree-row-selected text-white' : 'file-tree-row text-gray-300'
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
       >
-        <FileText size={16} className="flex-shrink-0" />
+        <FileText size={16} className="flex-shrink-0 text-current" />
         <span className="flex-1 truncate text-sm">{node.name}</span>
         
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+        <div className="flex items-center gap-1 opacity-100">
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onSaveFile(node.fileData);
+              const currentName = node.name;
+              const newName = prompt('Rename file:', currentName);
+              if (!newName || newName.trim() === '' || newName.trim() === currentName) return;
+
+              const parts = node.path.split('/');
+              parts[parts.length - 1] = newName.trim();
+              const newPath = parts.join('/');
+              onRenameFile(node.path, newPath);
             }}
-            className="p-1 hover:bg-green-600 rounded transition"
-            title="Save file"
+            className="p-1 hover:bg-blue-500 rounded transition"
+            title="Rename file"
           >
-            <Save size={12} />
+            <Pencil size={12} />
           </button>
           <button
             onClick={(e) => {
@@ -106,7 +122,7 @@ function TreeNode({
   return (
     <div>
       <div
-        className="flex items-center gap-2 px-2 py-1.5 cursor-pointer rounded transition hover:bg-gray-700 text-gray-300 group"
+        className="file-tree-row flex items-center gap-2 px-2 py-1.5 cursor-pointer rounded transition text-gray-300 group"
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onClick={() => toggleExpand(node.path)}
       >
@@ -114,7 +130,24 @@ function TreeNode({
         {isExpanded ? <FolderOpen size={16} className="text-blue-400" /> : <Folder size={16} className="text-blue-400" />}
         <span className="flex-1 truncate text-sm font-medium">{node.name}</span>
         
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+        <div className="flex items-center gap-1 opacity-100">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const currentName = node.name;
+              const newName = prompt('Rename folder:', currentName);
+              if (!newName || newName.trim() === '' || newName.trim() === currentName) return;
+
+              const parts = node.path.split('/');
+              parts[parts.length - 1] = newName.trim();
+              const newPath = parts.join('/');
+              onRenameFile(node.path, newPath);
+            }}
+            className="p-1 hover:bg-blue-500 rounded transition"
+            title="Rename folder"
+          >
+            <Pencil size={12} />
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -158,7 +191,7 @@ function TreeNode({
           currentFile={currentFile}
           onSelectFile={onSelectFile}
           onDeleteFile={onDeleteFile}
-          onSaveFile={onSaveFile}
+          onRenameFile={onRenameFile}
           expanded={expanded}
           toggleExpand={toggleExpand}
           onNewFileInFolder={onNewFileInFolder}
@@ -170,7 +203,7 @@ function TreeNode({
 }
 
 // Main FileTree Component
-export default function FileTree({ files, currentFile, onSelectFile, onCreateFile, onDeleteFile, onSaveFile }) {
+export default function FileTree({ files, currentFile, onSelectFile, onCreateFile, onCreateFolder, onDeleteFile, onRenameFile }) {
   const [expanded, setExpanded] = useState(new Set(['root', '']));
   const [showInput, setShowInput] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -216,21 +249,25 @@ export default function FileTree({ files, currentFile, onSelectFile, onCreateFil
 
   const handleCreate = () => {
     if (inputValue.trim()) {
-      let fullPath;
       if (inputType === 'file') {
-        fullPath = creatingInFolder 
+        const fullPath = creatingInFolder 
           ? `${creatingInFolder}/${inputValue.trim()}` 
           : inputValue.trim();
+        if (typeof onCreateFile === 'function') {
+          onCreateFile(fullPath);
+        }
       } else {
-        // For folder, create a .gitkeep file
+        // For folders, use the dedicated onCreateFolder handler
         const folderName = inputValue.trim();
-        fullPath = creatingInFolder 
-          ? `${creatingInFolder}/${folderName}/.gitkeep` 
-          : `${folderName}/.gitkeep`;
-      }
-      
-      if (typeof onCreateFile === 'function') {
-        onCreateFile(fullPath);
+        const fullPath = creatingInFolder 
+          ? `${creatingInFolder}/${folderName}` 
+          : folderName;
+        if (typeof onCreateFolder === 'function') {
+          onCreateFolder(fullPath);
+        } else if (typeof onCreateFile === 'function') {
+          // Fallback for hosts that don't provide onCreateFolder
+          onCreateFile(`${fullPath}/.gitkeep`);
+        }
       }
       setInputValue('');
       setShowInput(false);
@@ -270,7 +307,7 @@ export default function FileTree({ files, currentFile, onSelectFile, onCreateFil
         </div>
         
         {/* Root level creation buttons */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+        <div className="flex items-center gap-1 opacity-100">
           <button
             onClick={() => {
               setCreatingInFolder('');
@@ -343,7 +380,7 @@ export default function FileTree({ files, currentFile, onSelectFile, onCreateFil
               currentFile={currentFile}
               onSelectFile={onSelectFile}
               onDeleteFile={onDeleteFile}
-              onSaveFile={onSaveFile}
+              onRenameFile={onRenameFile}
               expanded={expanded}
               toggleExpand={toggleExpand}
               onNewFileInFolder={handleNewFileInFolder}

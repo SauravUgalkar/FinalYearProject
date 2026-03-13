@@ -10,22 +10,77 @@ class RoomManager {
     this.codeChangeThrottle = new Map();
   }
 
+  sanitizeName(rawName) {
+    return String(rawName || '').trim();
+  }
+
+  normalizePath(rawPath) {
+    return this.sanitizeName(rawPath).replace(/\/+$/, '');
+  }
+
+  sanitizeCodeStateFiles(files, fallbackLanguage) {
+    return (files || [])
+      .map((f) => {
+        const name = this.sanitizeName(f?.name);
+        if (!name) return null;
+        // Strip .gitkeep placeholder files
+        if (name === '.gitkeep' || name.endsWith('/.gitkeep')) return null;
+        return {
+          id: f?.id || f?._id?.toString() || name,
+          name,
+          content: typeof f?.content === 'string' ? f.content : '',
+          language: f?.language || fallbackLanguage || 'javascript',
+          lastModifiedBy: f?.lastModifiedBy || 'system',
+          lastModifiedAt: f?.lastModifiedAt || f?.lastModified || new Date(),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  syncPersistentFiles(roomId, files, fallbackLanguage) {
+    const room = this.activeRooms.get(roomId);
+    if (!room) return null;
+
+    room.codeState = room.codeState || {};
+    room.codeState.files = this.sanitizeCodeStateFiles(files, fallbackLanguage);
+    return room.codeState.files;
+  }
+
+  getCursorColor(userId) {
+    const palette = [
+      '#ef4444', '#f97316', '#eab308', '#22c55e', '#10b981',
+      '#06b6d4', '#3b82f6', '#6366f1', '#a855f7', '#ec4899'
+    ];
+
+    const source = String(userId || 'anonymous');
+    let hash = 0;
+    for (let i = 0; i < source.length; i += 1) {
+      hash = ((hash << 5) - hash) + source.charCodeAt(i);
+      hash |= 0;
+    }
+
+    return palette[Math.abs(hash) % palette.length];
+  }
+
+  getUniqueUsers(usersMap) {
+    const uniqueByUser = new Map();
+    for (const user of Array.from(usersMap.values())) {
+      const key = user?.userId ? String(user.userId) : `socket:${user?.socketId || 'unknown'}`;
+      // Last write wins so reconnect/newer socket state is preferred.
+      uniqueByUser.set(key, user);
+    }
+    return Array.from(uniqueByUser.values());
+  }
+
   async joinRoom(socket, roomId, userId, userName) {
     try {
       if (!this.activeRooms.has(roomId)) {
         const project = await Project.findById(roomId).lean();
-        const filesFromDb = project?.files || [];
+        const filesFromDb = this.sanitizeCodeStateFiles(project?.files || [], project?.language);
         this.activeRooms.set(roomId, {
           users: new Map(),
           codeState: {
-            files: filesFromDb.map((f) => ({
-              id: f._id?.toString() || f.id,
-              name: f.name,
-              content: f.content || '',
-              language: f.language || project?.language || 'javascript',
-              lastModifiedBy: f.lastModifiedBy || project?.owner?.toString() || 'system',
-              lastModifiedAt: f.lastModified || project?.updatedAt || new Date(),
-            })),
+            files: filesFromDb,
           },
           operations: [],
         });
@@ -33,6 +88,12 @@ class RoomManager {
 
       const room = this.activeRooms.get(roomId);
       const project = await Project.findById(roomId).lean();
+
+      // Always reconcile active room files from MongoDB on join so refreshes do not
+      // rehydrate stale in-memory state after a delete.
+      if (room && project) {
+        room.codeState.files = this.sanitizeCodeStateFiles(project.files || [], project.language);
+      }
 
       let role = 'viewer';
       if (project) {
@@ -48,7 +109,14 @@ class RoomManager {
       
       // Add user to socket room
       socket.join(roomId);
-      room.users.set(socket.id, { userId, userName, role, cursorPosition: { line: 0, column: 0 } });
+      room.users.set(socket.id, {
+        socketId: socket.id,
+        userId,
+        userName,
+        role,
+        cursorColor: this.getCursorColor(userId),
+        cursorPosition: { lineNumber: 1, column: 1, fileName: null }
+      });
       this.userRoomMap.set(socket.id, roomId);
 
       if (!room.lineEdits) {
@@ -60,16 +128,16 @@ class RoomManager {
         userName,
         role,
         socketId: socket.id,
-        activeUsers: Array.from(room.users.values())
+        activeUsers: this.getUniqueUsers(room.users)
       });
 
       socket.emit('room-state', {
         roomId,
         codeState: room.codeState,
-        activeUsers: Array.from(room.users.values())
+        activeUsers: this.getUniqueUsers(room.users)
       });
 
-      this.io.to(roomId).emit('room-users', Array.from(room.users.values()));
+      this.io.to(roomId).emit('room-users', this.getUniqueUsers(room.users));
       await this.saveRoomState(roomId, room);
       console.log(`User ${userName} joined room ${roomId}`);
     } catch (error) {
@@ -86,6 +154,7 @@ class RoomManager {
     if (!room) return;
 
     const { fileId, content, language, changedLines } = data;
+    const normalizedFileName = this.normalizePath(data.fileName || fileId);
     const user = room.users.get(socket.id);
 
     if (user?.role === 'viewer') {
@@ -149,20 +218,30 @@ class RoomManager {
     if (!room.codeState.files) room.codeState.files = [];
     
     // Support matching by id OR name, since clients may send either
-    const fileIndex = room.codeState.files.findIndex(
-      f => f.id === fileId || f.name === fileId
-    );
+    const fileIndex = room.codeState.files.findIndex((f) => {
+      const normalizedName = this.normalizePath(f.name);
+      return f.id === fileId || normalizedName === normalizedFileName;
+    });
     let isNewFile = false;
     
     if (fileIndex >= 0) {
+      const existingContent = room.codeState.files[fileIndex].content || '';
+      if (existingContent === content && !data.isNewFile) {
+        return;
+      }
       room.codeState.files[fileIndex].content = content;
       room.codeState.files[fileIndex].lastModifiedBy = user.userName;
       room.codeState.files[fileIndex].lastModifiedAt = new Date();
     } else {
       isNewFile = data.isNewFile === true;
+      if (!normalizedFileName) {
+        socket.emit('error', { message: 'File name cannot be empty' });
+        return;
+      }
+
       room.codeState.files.push({
-        id: fileId,
-        name: data.fileName || 'Untitled',
+        id: fileId || normalizedFileName,
+        name: normalizedFileName,
         content,
         language: language || 'javascript',
         lastModifiedBy: user.userName,
@@ -177,34 +256,43 @@ class RoomManager {
         {
           $set: {
             files: room.codeState.files.map((f) => ({
-              name: f.name,
+              name: this.sanitizeName(f.name),
               content: f.content,
               language: f.language,
               lastModified: f.lastModifiedAt || new Date(),
+              lastModifiedBy: f.lastModifiedBy || 'system'
             })),
             updatedAt: new Date(),
           },
         },
         { new: false }
       );
+      console.log(`[RoomManager] Persisted ${room.codeState.files.length} files to MongoDB for room ${roomId}`);
     } catch (err) {
       console.error('[RoomManager] Failed to persist file change to MongoDB:', err.message);
     }
 
-    // Note: Real-time sync is now handled by Yjs (yjs-sync events)
-    // The code-changed broadcast is disabled to prevent duplication with Yjs
-    // Only new files are broadcast via code-changed
-    if (isNewFile) {
-      socket.to(roomId).emit('code-changed', {
-        fileId,
-        fileName: data.fileName,
+    // Broadcast all content updates so insert/delete/replace remain in sync.
+    if (isNewFile || typeof content === 'string') {
+      const broadcastData = {
+        fileId: fileId || normalizedFileName,
+        fileName: normalizedFileName,
         content,
         language: data.language,
         modifiedBy: user.userName,
-        isNewFile: true,
+        isNewFile,
+        isFallbackSync: Boolean(data.isFallbackSync),
         timestamp: new Date(),
         hasConflicts: conflicts.length > 0
-      });
+      };
+
+      // For new files, broadcast to ALL users including the creator for state consistency
+      if (isNewFile) {
+        this.io.to(roomId).emit('code-changed', broadcastData);
+      } else {
+        // For code changes, broadcast to others only to avoid duplicate processing
+        socket.to(roomId).emit('code-changed', broadcastData);
+      }
     }
 
     // Store operation for undo/redo
@@ -303,44 +391,54 @@ class RoomManager {
     if (!roomId) return;
 
     const room = this.activeRooms.get(roomId);
-    const user = room.users.get(socket.id);
+    if (!room) return;
 
-    if (user) {
-      user.cursorPosition = data.position;
-    }
+    const user = room.users.get(socket.id);
+    if (!user) return;
+
+    const position = data?.position || {};
+    const normalizedPosition = {
+      lineNumber: Math.max(1, Number(position.lineNumber || position.line || 1)),
+      column: Math.max(1, Number(position.column || 1)),
+      fileName: data?.fileName || position.fileName || null,
+    };
+
+    user.cursorPosition = normalizedPosition;
 
     // Broadcast cursor position
     socket.to(roomId).emit('cursor-moved', {
+      socketId: socket.id,
       userId: user.userId,
       userName: user.userName,
-      position: data.position
+      cursorColor: user.cursorColor,
+      position: normalizedPosition
     });
   }
 
   async handleCodeExecution(socket, data) {
     const roomId = this.userRoomMap.get(socket.id);
     if (!roomId) {
-      socket.emit('execution-error', { error: 'Room not found' });
+      socket.emit('execution-error', { compileError: null, runtimeError: 'Room not found', output: '' });
       return;
     }
 
     const room = this.activeRooms.get(roomId);
     if (!room) {
-      socket.emit('execution-error', { error: 'Active room not found' });
+      socket.emit('execution-error', { compileError: null, runtimeError: 'Active room not found', output: '' });
       return;
     }
     
     const user = room.users.get(socket.id);
     
     if (!user) {
-      socket.emit('execution-error', { error: 'User not found in room' });
+      socket.emit('execution-error', { compileError: null, runtimeError: 'User not found in room', output: '' });
       return;
     }
 
     console.log(`[RoomManager] User ${user.userName} (role: ${user.role}) attempting code execution in room ${roomId}`);
 
     if (user.role === 'viewer') {
-      socket.emit('execution-error', { error: 'View-only users cannot execute code' });
+      socket.emit('execution-error', { compileError: null, runtimeError: 'View-only users cannot execute code', output: '' });
       return;
     }
 
@@ -354,7 +452,9 @@ class RoomManager {
         userName: user.userName,
         code: data.code,
         language: data.language,
-        input: data.input || ''
+        input: data.input || '',
+        entryFileName: data.activeFileName || data.entryFileName || null,
+        files: Array.isArray(data.files) ? data.files : []
       });
 
       console.log(`[RoomManager] Job added with ID: ${job.id}`);
@@ -366,6 +466,8 @@ class RoomManager {
           socketId: socket.id,
           userId: user.userId,
           userName: user.userName,
+          code: data.code,
+          language: data.language,
         });
         console.log(`[RoomManager] Stored mapping: job ${job.id} -> room ${roomId}, socket ${socket.id}, user ${user.userName}`);
       }
@@ -383,7 +485,9 @@ class RoomManager {
     } catch (error) {
       console.error('[RoomManager] Code execution error:', error.message);
       socket.emit('execution-error', { 
-        error: 'Failed to queue code execution: ' + error.message 
+        compileError: null,
+        runtimeError: 'Failed to queue code execution: ' + error.message,
+        output: ''
       });
     }
   }
@@ -395,7 +499,9 @@ class RoomManager {
     const room = this.activeRooms.get(roomId);
     if (!room) return;
 
-    const { fileId } = data;
+    const rawTargetPath = data.path || data.fileId;
+    const fileId = this.normalizePath(rawTargetPath);
+    const deleteType = data.type === 'folder' ? 'folder' : 'file';
     const user = room.users.get(socket.id);
 
     if (user?.role === 'viewer') {
@@ -403,10 +509,23 @@ class RoomManager {
       return;
     }
 
-    // Remove file from code state
+    if (!fileId) {
+      socket.emit('error', { message: 'Delete path cannot be empty' });
+      return;
+    }
+
+    // Remove file from code state and handle folder deletions
     if (room.codeState.files) {
+      const folderPath = fileId;
+      const folderPrefix = `${folderPath}/`;
+
       room.codeState.files = room.codeState.files.filter(
-        (f) => f.id !== fileId && f.name !== fileId
+        (f) => {
+          const normalizedName = this.normalizePath(f.name);
+          if (normalizedName === folderPath || f.id === fileId) return false;
+          if (deleteType === 'folder' && normalizedName.startsWith(folderPrefix)) return false;
+          return true;
+        }
       );
     }
 
@@ -415,21 +534,24 @@ class RoomManager {
       await Project.findByIdAndUpdate(roomId, {
         $set: {
           files: room.codeState.files.map((f) => ({
-            name: f.name,
+            name: this.sanitizeName(f.name),
             content: f.content,
             language: f.language,
             lastModified: f.lastModifiedAt || new Date(),
+            lastModifiedBy: f.lastModifiedBy || 'system'
           })),
           updatedAt: new Date(),
         },
       });
+      console.log(`[RoomManager] Persisted deletion - ${room.codeState.files.length} files remain in room ${roomId}`);
     } catch (err) {
       console.error('[RoomManager] Failed to persist file deletion:', err.message);
     }
 
-    // Broadcast to all in room
-    this.io.to(roomId).emit('file-deleted-remote', {
+    // Broadcast to collaborators only; deleter already updated local UI.
+    socket.broadcast.to(roomId).emit('file-deleted-remote', {
       fileId,
+      type: deleteType,
       deletedBy: user.userName,
       timestamp: new Date()
     });
@@ -455,14 +577,19 @@ class RoomManager {
       room.users.delete(socket.id);
       this.userRoomMap.delete(socket.id);
 
+      socket.to(roomId).emit('cursor-removed', {
+        socketId: socket.id,
+        userId: user.userId,
+      });
+
       socket.to(roomId).emit('user-left', {
         userId: user.userId,
         userName: user.userName,
-        activeUsers: Array.from(room.users.values())
+        activeUsers: this.getUniqueUsers(room.users)
       });
 
       // Broadcast updated user list to entire room
-      this.io.to(roomId).emit('room-users', Array.from(room.users.values()));
+      this.io.to(roomId).emit('room-users', this.getUniqueUsers(room.users));
 
       // Clean up empty rooms
       if (room.users.size === 0) {

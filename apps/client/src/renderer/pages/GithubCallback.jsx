@@ -16,7 +16,7 @@ export default function GithubCallback() {
 
       try {
         // Include Authorization when available so server can persist token to user
-        const authToken = sessionStorage.getItem('token');
+        const authToken = sessionStorage.getItem('token') || localStorage.getItem('oauth_app_token');
         const res = await fetch('http://localhost:5000/api/github/callback', {
           method: 'POST',
           headers: {
@@ -35,6 +35,7 @@ export default function GithubCallback() {
         // Save token for export flows
         // Mark as linked
         localStorage.setItem('github_token', 'linked');
+        localStorage.removeItem('oauth_app_token');
         setStatus('GitHub connected! You can close this window.');
         
         // If this is a popup, close it after 2 seconds

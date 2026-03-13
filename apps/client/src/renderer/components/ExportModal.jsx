@@ -141,6 +141,11 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
 
   const startGithubLogin = async () => {
     try {
+      const appToken = sessionStorage.getItem('token');
+      if (appToken) {
+        localStorage.setItem('oauth_app_token', appToken);
+      }
+
       setAuthLoading(true);
       const res = await fetch('http://localhost:5000/api/github/auth-url');
       const data = await res.json();
@@ -183,6 +188,11 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
   // Start GitHub OAuth with provided authUrl and attach Authorization header for token persistence
   const startGithubLoginWithAuth = async (authUrl) => {
     return new Promise((resolve) => {
+      const appToken = sessionStorage.getItem('token');
+      if (appToken) {
+        localStorage.setItem('oauth_app_token', appToken);
+      }
+
       const width = 600;
       const height = 700;
       const left = window.screen.width / 2 - width / 2;

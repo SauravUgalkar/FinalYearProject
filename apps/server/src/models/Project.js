@@ -6,8 +6,6 @@ const projectSchema = new mongoose.Schema({
   owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   roomId: {
     type: String,
-    unique: true,
-    sparse: true,
     default: function () {
       return this._id ? this._id.toString() : undefined;
     }
@@ -53,19 +51,6 @@ const projectSchema = new mongoose.Schema({
   isPublic: { type: Boolean, default: false },
   githubUrl: String,
   submissions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Submission' }],
-  recordings: [
-    {
-      id: String,
-      title: String,
-      startTime: Date,
-      endTime: Date,
-      duration: Number,
-      size: Number,
-      recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      status: { type: String, enum: ['recording', 'completed', 'failed'], default: 'completed' },
-      createdAt: { type: Date, default: Date.now }
-    }
-  ],
   gitStatus: {
     staged: [String],
     unstaged: [String],
@@ -105,6 +90,15 @@ const projectSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
+// Enforce uniqueness only for valid string values and ignore null/missing roomId.
+projectSchema.index(
+  { roomId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { roomId: { $type: 'string' } }
+  }
+);
 
 // Ensure roomId is always populated to avoid unique null collisions
 projectSchema.pre('save', function(next) {

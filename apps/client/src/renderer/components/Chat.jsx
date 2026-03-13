@@ -181,19 +181,27 @@ export default function Chat({ roomId, onlineUsers = [] }) {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 && (
           <p className="text-gray-500 text-sm text-center py-4">No messages yet</p>
         )}
-        {messages.map((msg, idx) => (
-          <div key={idx} className="text-sm">
-            <p className="text-blue-400 font-medium">{msg.userName || 'Anonymous'}</p>
-            <p className="text-gray-300">{msg.message}</p>
-            <p className="text-gray-500 text-xs mt-1">
-              {new Date(msg.timestamp).toLocaleTimeString()}
-            </p>
-          </div>
-        ))}
+        {messages.map((msg, idx) => {
+          const messageTime = new Date(msg.timestamp);
+          const isToday = messageTime.toDateString() === new Date().toDateString();
+          const timeStr = isToday 
+            ? messageTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : messageTime.toLocaleDateString() + ' ' + messageTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          
+          return (
+            <div key={idx} className="bg-gray-800 rounded p-2">
+              <div className="flex justify-between items-start">
+                <p className="text-blue-400 font-medium text-sm">{msg.userName || 'Anonymous'}</p>
+                <p className="text-gray-500 text-xs">{timeStr}</p>
+              </div>
+              <p className="text-gray-200 text-sm mt-1 break-words">{msg.message}</p>
+            </div>
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 

@@ -10,6 +10,7 @@ const mongoose = require("mongoose");
 const IORedis = require("ioredis");
 const { Queue, QueueEvents } = require("bullmq");
 const Project = require("./models/Project");
+const Submission = require("./models/Submission");
 
 // -----------------------------------------------------------------------------
 // ENV VALIDATION (FAIL FAST)
@@ -153,7 +154,14 @@ queueEvents.on("completed", (job) => {
   
   const jobId = job?.jobId || job?.id;
   console.log(`[Queue] Extracted jobId: ${jobId}`);
-  const returnvalue = job?.returnvalue || job?.result;
+  // BullMQ 4.x QueueEvents passes returnvalue as a JSON string — parse it
+  const raw = job?.returnvalue || job?.result;
+  let returnvalue;
+  try {
+    returnvalue = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+  } catch (e) {
+    returnvalue = {};
+  }
   console.log(`[Queue] Extracted returnvalue:`, returnvalue);
   
   if (jobId) {
@@ -163,28 +171,43 @@ queueEvents.on("completed", (job) => {
     if (jobInfo) {
       const { roomId, socketId } = jobInfo;
       
-      // Check if execution resulted in an error
-      if (returnvalue?.status === 'error' || returnvalue?.error) {
-        console.log(`[Queue] Execution had error, emitting execution-error to socket ${socketId}`);
+      // Route result based on status: compile-error, runtime error, or success
+      const workerStatus = returnvalue?.status;
+      const isCompileError = workerStatus === 'compile-error';
+      const isRuntimeError = workerStatus === 'error' || workerStatus === 'timeout';
+
+      if (isCompileError) {
+        console.log(`[Queue] Compile error, emitting execution-error to socket ${socketId}`);
         io.to(socketId).emit('execution-error', {
           jobId: jobId,
-          error: returnvalue?.error || 'Execution failed',
+          compileError: returnvalue?.compileError || 'Compilation failed',
+          runtimeError: null,
+          output: ''
+        });
+        persistAnalyticsForJob(jobInfo, 'error', 0);
+        saveSubmission(jobInfo, returnvalue, 'error');
+      } else if (isRuntimeError) {
+        console.log(`[Queue] Runtime error, emitting execution-error to socket ${socketId}`);
+        io.to(socketId).emit('execution-error', {
+          jobId: jobId,
+          compileError: null,
+          runtimeError: returnvalue?.runtimeError || returnvalue?.error || 'Execution failed',
           output: returnvalue?.output || ''
         });
-        
-        // Persist analytics as error
         persistAnalyticsForJob(jobInfo, 'error', 0);
+        saveSubmission(jobInfo, returnvalue, 'error');
       } else {
         console.log(`[Queue] Emitting execution-result to socket ${socketId}`);
         io.to(socketId).emit('execution-result', {
           jobId: jobId,
           output: returnvalue?.output || '',
+          compileError: null,
+          runtimeError: returnvalue?.runtimeError || null,
           executionTime: returnvalue?.executionTime || 0,
           status: 'success'
         });
-        
-        // Persist analytics as success
         persistAnalyticsForJob(jobInfo, 'success', returnvalue?.executionTime || 0);
+        saveSubmission(jobInfo, returnvalue, 'success');
       }
       
       // Broadcast to room so owners/collaborators can see others' runs
@@ -216,7 +239,9 @@ queueEvents.on("failed", (job) => {
       console.log(`[Queue] Emitting execution-error to socket ${socketId}`);
       io.to(socketId).emit('execution-error', {
         jobId: jobId,
-        error: failedReason || 'Job failed'
+        compileError: null,
+        runtimeError: failedReason || 'Job failed',
+        output: ''
       });
 
       // Broadcast to the room for visibility
@@ -228,8 +253,9 @@ queueEvents.on("failed", (job) => {
         status: 'error',
       });
 
-      // Persist failed analytics
+      // Persist failed analytics and submission
       persistAnalyticsForJob(jobInfo, 'error', 0);
+      saveSubmission(jobInfo, { output: '', error: failedReason || 'Job failed' }, 'error');
       jobRoomMap.delete(jobId);
     }
   }
@@ -238,6 +264,32 @@ queueEvents.on("failed", (job) => {
 queueEvents.on("error", (error) => {
   console.error("[Queue] QueueEvents error:", error);
 });
+
+// Save a Submission document and link it to the project
+const saveSubmission = async (jobInfo, returnvalue, status) => {
+  if (!jobInfo?.roomId || !jobInfo?.userId) return;
+  try {
+    const submission = new Submission({
+      projectId: jobInfo.roomId,
+      userId: jobInfo.userId,
+      code: jobInfo.code || '',
+      language: jobInfo.language || 'javascript',
+      executionOutput: returnvalue?.output || '',
+      executionError: returnvalue?.compileError || returnvalue?.runtimeError || returnvalue?.error || '',
+      executionTime: returnvalue?.executionTime || 0,
+      memoryUsed: returnvalue?.memoryUsed || 0,
+      status,
+    });
+    await submission.save();
+    // Link to project's submissions array
+    await Project.findByIdAndUpdate(jobInfo.roomId, {
+      $push: { submissions: submission._id }
+    });
+    console.log(`[Submission] Saved submission ${submission._id} for user ${jobInfo.userId} in project ${jobInfo.roomId}`);
+  } catch (err) {
+    console.error('[Submission] Failed to save submission:', err.message);
+  }
+};
 
 // Expose job room map for roomManager to use
 global.jobRoomMap = jobRoomMap;
@@ -250,7 +302,7 @@ console.log("Using Mongo URI:", process.env.MONGODB_URI);
 const backfillRoomIds = async () => {
   try {
     const result = await Project.updateMany(
-      { $or: [{ roomId: null }, { roomId: { $exists: false } }] },
+      { $or: [{ roomId: null }, { roomId: { $exists: false } }, { roomId: "" }] },
       [
         {
           $set: {
@@ -267,11 +319,46 @@ const backfillRoomIds = async () => {
   }
 };
 
+const ensureProjectRoomIdIndex = async () => {
+  try {
+    const collection = mongoose.connection.collection('projects');
+
+    try {
+      await collection.dropIndex('roomId_1');
+      console.log('Dropped existing roomId_1 index');
+    } catch (err) {
+      const isMissingIndex =
+        err.codeName === 'IndexNotFound' ||
+        err.code === 27 ||
+        String(err.message || '').includes('index not found');
+
+      if (!isMissingIndex) {
+        throw err;
+      }
+    }
+
+    await collection.createIndex(
+      { roomId: 1 },
+      {
+        name: 'roomId_1',
+        unique: true,
+        background: true,
+        partialFilterExpression: { roomId: { $type: 'string' } },
+      }
+    );
+
+    console.log('Ensured partial unique index on projects.roomId');
+  } catch (err) {
+    console.error('Failed to ensure roomId index:', err.message);
+  }
+};
+
 mongoose
   .connect(MONGODB_URI)
   .then(async () => {
     console.log("MongoDB connected");
     await backfillRoomIds();
+    await ensureProjectRoomIdIndex();
   })
   .catch((err) => {
     console.error("MongoDB connection failed:", err.message);
@@ -292,7 +379,6 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/projects", require("./routes/projects"));
 app.use("/api/analytics", require("./routes/analytics"));
 app.use("/api/github", require("./routes/github"));
-app.use("/api/recordings", require("./routes/recordings"));
 app.use("/api/git", require("./routes/git"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/invites", require("./routes/invites"));
@@ -304,6 +390,7 @@ const RoomManager = require("./sockets/roomManager");
 const yjsProvider = require("./sockets/yjsProvider");
 const RoomInvite = require("./models/RoomInvite");
 const roomManager = new RoomManager(io, redisClient, executionQueue);
+app.set('roomManager', roomManager);
 
 io.on("connection", (socket) => {
   // Extract user identity from socket handshake
@@ -456,20 +543,27 @@ io.on("connection", (socket) => {
     console.log(`[Socket] cursor-move from socket ${socket.id}`);
     roomManager.handleCursorMove(socket, data);
   });
-      const role = roomManager.getUserRole(socket.id);
-      if (role === 'viewer') {
-        socket.emit('permission-denied', { action: 'edit', message: 'View-only users cannot edit code' });
-        return;
-      }
 
   socket.on("execute-code", (data) => {
     console.log(`[Socket] execute-code from socket ${socket.id}`);
     roomManager.handleCodeExecution(socket, data);
   });
 
+  // Legacy event name kept for backwards-compat
   socket.on("file-deleted", (data) => {
-    console.log(`[Socket] file-deleted from socket ${socket.id}`);
-    roomManager.handleFileDelete(socket, data);
+    console.log(`[Socket] file-deleted (legacy) from socket ${socket.id}`);
+    roomManager.handleFileDelete(socket, { ...data, type: data.type || 'file' });
+  });
+
+  // Current event names emitted by the client
+  socket.on("deleteFile", (data) => {
+    console.log(`[Socket] deleteFile from socket ${socket.id}`);
+    roomManager.handleFileDelete(socket, { ...data, type: 'file' });
+  });
+
+  socket.on("deleteFolder", (data) => {
+    console.log(`[Socket] deleteFolder from socket ${socket.id}`);
+    roomManager.handleFileDelete(socket, { ...data, type: 'folder' });
   });
 
   socket.on("leave-room", (data) => {

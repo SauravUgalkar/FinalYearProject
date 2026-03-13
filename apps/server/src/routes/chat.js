@@ -37,7 +37,7 @@ router.get('/project/:projectId', verifyToken, async (req, res) => {
   }
 });
 
-// Clear all chat messages for a project
+// Clear all chat messages for a project (Owner/Admin only)
 router.delete('/project/:projectId', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -47,6 +47,12 @@ router.delete('/project/:projectId', verifyToken, async (req, res) => {
     if (!project) {
       console.log('[Chat] Project not found for deletion:', projectId);
       return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // Check if user is owner
+    const isOwner = project.owner.toString() === req.userId;
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only project owner can clear chat history' });
     }
     
     // Clear chat history in database

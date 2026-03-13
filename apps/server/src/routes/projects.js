@@ -17,6 +17,58 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+const canEditProject = (project, userId) => {
+  if (!project) return false;
+  const isOwner = project.owner.toString() === userId;
+  const isCollaboratorEditor = (project.collaborators || []).some(
+    (c) => c.userId?.toString() === userId && (c.role === 'editor' || c.role === 'admin')
+  );
+  return isOwner || isCollaboratorEditor;
+};
+
+const getLanguageFromName = (fileName) => {
+  const ext = String(fileName || '').split('.').pop().toLowerCase();
+  const extensions = {
+    js: 'javascript',
+    jsx: 'javascript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    py: 'python',
+    java: 'java',
+    cpp: 'cpp',
+    c: 'c',
+    cs: 'csharp',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    md: 'markdown'
+  };
+  return extensions[ext] || 'plaintext';
+};
+
+const sanitizeFiles = (files, defaultLanguage) => {
+  if (!Array.isArray(files)) return [];
+
+  return files
+    .map((f) => {
+      const rawName = String(f?.name || '');
+      const name = rawName.trim();
+      if (!name) return null;
+      // Strip .gitkeep placeholder files (folder markers)
+      if (name === '.gitkeep' || name.endsWith('/.gitkeep')) return null;
+      const inferredLanguage = getLanguageFromName(name);
+      return {
+        _id: f?._id,
+        name,
+        content: typeof f?.content === 'string' ? f.content : '',
+        language: inferredLanguage !== 'plaintext' ? inferredLanguage : (f?.language || defaultLanguage || 'javascript'),
+        lastModified: f?.lastModified || f?.lastModifiedAt || new Date(),
+        lastModifiedBy: f?.lastModifiedBy || 'system'
+      };
+    })
+    .filter(Boolean);
+};
+
 router.post('/', verifyToken, async (req, res) => {
   try {
     const { name, description, language, isPublic } = req.body;
@@ -30,13 +82,7 @@ router.post('/', verifyToken, async (req, res) => {
       isInviteOnly: true, // Default to secure mode
       invitedUsers: [],
       activeUsers: [],
-      files: [
-        {
-          name: 'main.' + getFileExtension(language),
-          content: getBoilerplate(language),
-          language
-        }
-      ]
+      files: []
     });
 
     // Align roomId with the document id to keep the unique index happy
@@ -95,7 +141,10 @@ router.get('/:projectId', verifyToken, async (req, res) => {
       });
     }
 
-    res.json(project);
+    const projectResponse = project.toObject();
+    projectResponse.files = sanitizeFiles(project.files, project.language);
+
+    res.json(projectResponse);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -105,24 +154,100 @@ router.put('/:projectId', verifyToken, async (req, res) => {
   try {
     const { name, description, files } = req.body;
     
-    // Verify ownership before allowing update
+    // Verify authorization before allowing update
     const project = await Project.findById(req.params.projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    if (project.owner.toString() !== req.userId) {
-      return res.status(403).json({ error: 'Only project owner can update project details' });
+    if (!canEditProject(project, req.userId)) {
+      return res.status(403).json({ error: 'Only project owner or editor collaborators can update project details' });
     }
+
+    const updateDoc = { updatedAt: new Date() };
+    if (typeof name === 'string') updateDoc.name = name;
+    if (typeof description === 'string') updateDoc.description = description;
+    const sanitizedFiles = Array.isArray(files)
+      ? sanitizeFiles(files, project.language)
+      : null;
+    if (sanitizedFiles) updateDoc.files = sanitizedFiles;
 
     const updatedProject = await Project.findByIdAndUpdate(
       req.params.projectId,
-      { name, description, files, updatedAt: new Date() },
+      updateDoc,
       { new: true }
     );
+
+    if (sanitizedFiles) {
+      const roomManager = req.app.get('roomManager');
+      roomManager?.syncPersistentFiles(req.params.projectId, sanitizedFiles, project.language);
+    }
+
     res.json(updatedProject);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/:projectId/files', verifyToken, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    if (!canEditProject(project, req.userId)) {
+      return res.status(403).json({ error: 'Only project owner or editor collaborators can delete files' });
+    }
+
+    const rawTargetPath = String(req.query.path || req.body?.path || '').trim();
+    if (!rawTargetPath) {
+      return res.status(400).json({ error: 'File path is required' });
+    }
+
+    const targetPath = rawTargetPath.replace(/\/+$/, '');
+    const nextFiles = (project.files || []).filter((f) => String(f.name || '').trim() !== targetPath);
+
+    project.files = nextFiles;
+    project.updatedAt = new Date();
+    await project.save();
+
+    return res.json({ success: true, deletedPath: targetPath, deletedType: 'file', files: project.files });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/:projectId/folders', verifyToken, async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    if (!canEditProject(project, req.userId)) {
+      return res.status(403).json({ error: 'Only project owner or editor collaborators can delete folders' });
+    }
+
+    const rawTargetPath = String(req.query.path || req.body?.path || '').trim();
+    if (!rawTargetPath) {
+      return res.status(400).json({ error: 'Folder path is required' });
+    }
+
+    const folderPath = rawTargetPath.replace(/\/+$/, '');
+    const folderPrefix = `${folderPath}/`;
+    const nextFiles = (project.files || []).filter((f) => {
+      const name = String(f.name || '').trim();
+      return name !== folderPath && name !== folderPrefix && !name.startsWith(folderPrefix);
+    });
+
+    project.files = nextFiles;
+    project.updatedAt = new Date();
+    await project.save();
+
+    return res.json({ success: true, deletedPath: folderPath, deletedType: 'folder', files: project.files });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -271,17 +396,6 @@ function getFileExtension(language) {
     csharp: 'cs'
   };
   return extensions[language] || 'txt';
-}
-
-function getBoilerplate(language) {
-  const boilerplates = {
-    javascript: `// Welcome to CollabCode!\n// Write your JavaScript code here\n\nconsole.log("Hello, World!");`,
-    python: `# Welcome to CollabCode!\n# Write your Python code here\n\nprint("Hello, World!")`,
-    java: `public class Main {\n  public static void main(String[] args) {\n    System.out.println("Hello, World!");\n  }\n}`,
-    cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n  cout << "Hello, World!" << endl;\n  return 0;\n}`,
-    csharp: `using System;\n\nclass Program {\n  static void Main() {\n    Console.WriteLine("Hello, World!");\n  }\n}`
-  };
-  return boilerplates[language] || '';
 }
 
 module.exports = router;
