@@ -72,6 +72,74 @@ class RoomManager {
     return Array.from(uniqueByUser.values());
   }
 
+  async syncProjectActiveUsers(roomId) {
+    try {
+      const room = this.activeRooms.get(roomId);
+      const activeUsers = room
+        ? this.getUniqueUsers(room.users).map((user) => ({
+            userId: user.userId,
+            userName: user.userName,
+            joinedAt: new Date(),
+          }))
+        : [];
+
+      await Project.findByIdAndUpdate(roomId, {
+        $set: { activeUsers }
+      });
+    } catch (error) {
+      console.warn(`[RoomManager] Failed to sync active users for room ${roomId}:`, error.message);
+    }
+  }
+
+  async removeUserFromProjectRoom(roomId, removedUserId, reason = 'Your access to this project has been removed.') {
+    if (!roomId || !removedUserId) return;
+
+    const room = this.activeRooms.get(roomId);
+    if (!room) {
+      await this.syncProjectActiveUsers(roomId);
+      return;
+    }
+
+    const removedSocketIds = Array.from(room.users.entries())
+      .filter(([, user]) => String(user?.userId || '') === String(removedUserId))
+      .map(([socketId]) => socketId);
+
+    if (removedSocketIds.length === 0) {
+      await this.syncProjectActiveUsers(roomId);
+      return;
+    }
+
+    for (const socketId of removedSocketIds) {
+      const user = room.users.get(socketId);
+      room.users.delete(socketId);
+      this.userRoomMap.delete(socketId);
+
+      const socket = this.io.sockets.sockets.get(socketId);
+      if (socket) {
+        socket.emit('project-access-revoked', {
+          projectId: roomId,
+          message: reason,
+        });
+        socket.leave(roomId);
+      }
+
+      this.io.to(roomId).emit('cursor-removed', {
+        socketId,
+        userId: user?.userId,
+      });
+    }
+
+    const activeUsers = this.getUniqueUsers(room.users);
+    this.io.to(roomId).emit('room-users', activeUsers);
+
+    if (room.users.size === 0) {
+      this.activeRooms.delete(roomId);
+    }
+
+    await this.syncProjectActiveUsers(roomId);
+    await this.saveRoomState(roomId, room);
+  }
+
   async joinRoom(socket, roomId, userId, userName) {
     try {
       if (!this.activeRooms.has(roomId)) {
@@ -89,6 +157,11 @@ class RoomManager {
       const room = this.activeRooms.get(roomId);
       const project = await Project.findById(roomId).lean();
 
+      if (!project) {
+        socket.emit('join-error', { message: 'Room not found' });
+        return;
+      }
+
       // Always reconcile active room files from MongoDB on join so refreshes do not
       // rehydrate stale in-memory state after a delete.
       if (room && project) {
@@ -96,13 +169,22 @@ class RoomManager {
       }
 
       let role = 'viewer';
-      if (project) {
-        if (project.owner?.toString() === userId) {
-          role = 'admin';
-        } else {
-          const collaborator = (project.collaborators || []).find((c) => c.userId?.toString() === userId);
-          role = collaborator?.role || 'viewer';
-        }
+      const isOwner = String(project.owner || '') === String(userId || '');
+      const collaborator = (project.collaborators || []).find((c) => String(c.userId || '') === String(userId || ''));
+      const isInvited = (project.invitedUsers || []).some((id) => String(id || '') === String(userId || ''));
+
+      if (!isOwner && !collaborator && !isInvited && !project.isPublic) {
+        socket.emit('join-error', {
+          message: 'Access denied. You no longer have access to this project.',
+          requiresInvite: true
+        });
+        return;
+      }
+
+      if (isOwner) {
+        role = 'admin';
+      } else {
+        role = collaborator?.role || 'viewer';
       }
       
       console.log(`[RoomManager] User ${userName} assigned role: ${role} in room ${roomId}`);
@@ -138,6 +220,7 @@ class RoomManager {
       });
 
       this.io.to(roomId).emit('room-users', this.getUniqueUsers(room.users));
+      await this.syncProjectActiveUsers(roomId);
       await this.saveRoomState(roomId, room);
       console.log(`User ${userName} joined room ${roomId}`);
     } catch (error) {
@@ -590,6 +673,8 @@ class RoomManager {
 
       // Broadcast updated user list to entire room
       this.io.to(roomId).emit('room-users', this.getUniqueUsers(room.users));
+
+      void this.syncProjectActiveUsers(roomId);
 
       // Clean up empty rooms
       if (room.users.size === 0) {

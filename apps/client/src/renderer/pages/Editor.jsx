@@ -783,6 +783,12 @@ export default function EditorPage() {
       socket.on('room-users', handleRoomUsers);
       socket.on('room-state', handleRoomState);
 
+      const handleProjectAccessRevoked = (data) => {
+        alert(data?.message || 'Your access to this project was removed.');
+        navigate('/dashboard');
+      };
+      socket.on('project-access-revoked', handleProjectAccessRevoked);
+
       // Listen for join errors (access denied)
       socket.on('join-error', (data) => {
         console.error('Join error:', data);
@@ -796,6 +802,7 @@ export default function EditorPage() {
         socket.off('connect', joinRoom);
         socket.off('room-users', handleRoomUsers);
         socket.off('room-state', handleRoomState);
+        socket.off('project-access-revoked', handleProjectAccessRevoked);
         socket.off('join-error');
       };
     }

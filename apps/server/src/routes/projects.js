@@ -344,11 +344,24 @@ router.delete('/:projectId/collaborators/:collaboratorId', verifyToken, async (r
       return res.status(403).json({ error: 'Only project owner can remove collaborators' });
     }
 
+    const removedCollaborator = project.collaborators.find(
+      c => c._id.toString() === collaboratorId
+    );
+
     project.collaborators = project.collaborators.filter(
       c => c._id.toString() !== collaboratorId
     );
 
     await project.save();
+
+    const roomManager = req.app.get('roomManager');
+    if (removedCollaborator?.userId) {
+      await roomManager?.removeUserFromProjectRoom(
+        projectId,
+        removedCollaborator.userId.toString(),
+        'You were removed from this project by the owner.'
+      );
+    }
 
     res.json({
       message: 'Collaborator removed',

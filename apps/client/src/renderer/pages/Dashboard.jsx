@@ -132,12 +132,14 @@ export default function Dashboard() {
     0
   );
 
-  const getProjectConnectedPeopleCount = (project) => {
-    const collaboratorsCount = Array.isArray(project?.collaborators)
-      ? project.collaborators.length
-      : 0;
-    // Owner is always connected to the project membership model.
-    return collaboratorsCount + 1;
+  const getProjectOnlineUsersCount = (project) => {
+    const uniqueUsers = new Set(
+      (project?.activeUsers || [])
+        .map((user) => String(user?.userId || user?._id || user?.userName || ''))
+        .filter(Boolean)
+    );
+
+    return uniqueUsers.size;
   };
 
   const languageAlias = {
@@ -426,7 +428,7 @@ export default function Dashboard() {
                 <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
                   <p className="text-[11px] uppercase tracking-wide text-gray-500">Active</p>
                   <p className="text-sm font-semibold text-gray-200">
-                    {getProjectConnectedPeopleCount(project)} collaborator{getProjectConnectedPeopleCount(project) !== 1 ? 's' : ''}
+                    {getProjectOnlineUsersCount(project)} online
                   </p>
                 </div>
                 <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
@@ -435,8 +437,6 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              
-            
             </div>
             
           ))}
@@ -475,6 +475,7 @@ export default function Dashboard() {
         <ShareModal
           projectId={selectedProjectId}
           isOpen={shareModalOpen}
+          onProjectUpdated={fetchProjects}
           onClose={() => {
             setShareModalOpen(false);
             setSelectedProjectId(null);

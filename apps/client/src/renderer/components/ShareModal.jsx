@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { X, Trash2, Copy, Check } from 'lucide-react';
 
-export default function ShareModal({ projectId, isOpen, onClose }) {
+export default function ShareModal({ projectId, isOpen, onClose, onProjectUpdated }) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('editor');
   const [collaborators, setCollaborators] = useState([]);
@@ -56,6 +56,7 @@ export default function ShareModal({ projectId, isOpen, onClose }) {
       );
 
       setCollaborators(response.data.collaborators);
+      await onProjectUpdated?.();
       setEmail('');
       setRole('editor');
       setSuccess(`Project shared with ${email}`);
@@ -81,6 +82,7 @@ export default function ShareModal({ projectId, isOpen, onClose }) {
       );
 
       setCollaborators(response.data.collaborators);
+      await onProjectUpdated?.();
       setSuccess('Collaborator removed');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
