@@ -28,6 +28,9 @@
     "yjs": "^13.6.8"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.16",
     "postcss": "^8.4.31",
     "react-scripts": "5.0.1"

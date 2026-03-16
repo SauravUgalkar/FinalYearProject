@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -26,15 +28,15 @@ export default function Login() {
     console.log('Login attempt with:', formData);
 
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/login', formData, {
+      const response = await axios.post(`${API_URL}/auth/login`, formData, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000
       });
       console.log('Login success:', response.data);
       
       // Store token and user in sessionStorage (tab-isolated)
-      sessionStorage.setItem('token', response.data.token);
-      sessionStorage.setItem('user', JSON.stringify(response.data.user));
+      authStorage.setToken(response.data.token);
+      authStorage.setUser(response.data.user);
       
       console.log('Navigating to dashboard...');
       // Navigate to dashboard (ProtectedRoute will check sessionStorage)

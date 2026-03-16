@@ -15,6 +15,8 @@ import UserBadge from '../components/UserBadge';
 import InviteUserModal from '../components/InviteUserModal';
 import ImportRepoModal from '../components/ImportRepoModal';
 import { Play, Share2, Download, FileText, MessageCircle, BarChart3, FileDown, Home, Settings as SettingsIcon, GitBranch, ArrowLeft } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function EditorPage() {
   const { projectId } = useParams();
@@ -152,15 +154,14 @@ export default function EditorPage() {
   useEffect(() => {
     const loadProject = async () => {
       try {
-        const token = sessionStorage.getItem('token');
-        const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+        const user = authStorage.getUser() || {};
         setCurrentUserId(user.id);
         setCurrentUser(user);
         
         const response = await axios.get(
-          `http://localhost:5000/api/projects/${projectId}`,
+          `${API_URL}/projects/${projectId}`,
           {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: authStorage.getAuthHeaders()
           }
         );
         console.log('Project loaded from server:', response.data);
@@ -210,12 +211,11 @@ export default function EditorPage() {
   // Sync analytics to server
   const syncAnalytics = useCallback(async () => {
     try {
-      const token = sessionStorage.getItem('token');
       await axios.post(
-        `http://localhost:5000/api/analytics/project/${projectId}/update`,
+        `${API_URL}/analytics/project/${projectId}/update`,
         analytics,
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
     } catch (err) {
@@ -228,11 +228,10 @@ export default function EditorPage() {
     if (projectOwnerId !== currentUserId) return;
     
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.get(
-        `http://localhost:5000/api/analytics/project/${projectId}`,
+        `${API_URL}/analytics/project/${projectId}`,
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
       setAllUsersAnalytics(response.data.analytics || []);
@@ -272,11 +271,10 @@ export default function EditorPage() {
     if (!fileName) return;
     
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.get(
-        `http://localhost:5000/api/git/${projectId}/blame/${encodeURIComponent(fileName)}`,
+        `${API_URL}/git/${projectId}/blame/${encodeURIComponent(fileName)}`,
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
       setBlameData(response.data || []);
@@ -307,11 +305,11 @@ export default function EditorPage() {
   }, []);
 
   const persistProjectFiles = useCallback(async (updatedFiles, options = {}) => {
-    const token = sessionStorage.getItem('token');
+    const token = authStorage.getToken();
     if (!token) return;
 
     if (options.keepalive) {
-      await fetch(`http://localhost:5000/api/projects/${projectId}`, {
+      await fetch(`${API_URL}/projects/${projectId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -324,10 +322,10 @@ export default function EditorPage() {
     }
 
     await axios.put(
-      `http://localhost:5000/api/projects/${projectId}`,
+      `${API_URL}/projects/${projectId}`,
       { files: updatedFiles },
       {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: authStorage.getAuthHeaders()
       }
     );
   }, [projectId]);
@@ -425,11 +423,10 @@ export default function EditorPage() {
   // Track line modification
   const trackLineModification = useCallback(async (fileName, lineNumber, content) => {
     try {
-      const token = sessionStorage.getItem('token');
-      const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+      const user = authStorage.getUser() || {};
       
       await axios.post(
-        `http://localhost:5000/api/git/${projectId}/track-modification`,
+        `${API_URL}/git/${projectId}/track-modification`,
         {
           fileName,
           lineNumber,
@@ -437,7 +434,7 @@ export default function EditorPage() {
           userName: user.name
         },
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
     } catch (err) {
@@ -926,12 +923,11 @@ export default function EditorPage() {
     }
     
     try {
-      const token = sessionStorage.getItem('token');
       const endpoint = isFolderDelete
-        ? `http://localhost:5000/api/projects/${projectId}/folders`
-        : `http://localhost:5000/api/projects/${projectId}/files`;
+        ? `${API_URL}/projects/${projectId}/folders`
+        : `${API_URL}/projects/${projectId}/files`;
       const response = await axios.delete(endpoint, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authStorage.getAuthHeaders(),
         params: { path: folderPath },
       });
 

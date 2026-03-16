@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -25,14 +27,14 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const response = await axios.post('http://localhost:5000/api/auth/register', {
+      const response = await axios.post(`${API_URL}/auth/register`, {
         name: formData.name,
         email: formData.email,
         password: formData.password,
         codingLanguages: formData.skill ? [formData.skill] : []
       });
-      sessionStorage.setItem('token', response.data.token);
-      sessionStorage.setItem('user', JSON.stringify(response.data.user));
+      authStorage.setToken(response.data.token);
+      authStorage.setUser(response.data.user);
       navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Registration failed');

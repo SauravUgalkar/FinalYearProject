@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import io from 'socket.io-client';
+import { API_BASE_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 let socketInstance = null;
 let isInitialized = false;
@@ -11,11 +13,10 @@ export function useSocket() {
       isInitialized = true;
       
       // Get user data from sessionStorage for socket handshake
-      const userJson = sessionStorage.getItem('user');
-      const token = sessionStorage.getItem('token');
-      const user = userJson ? JSON.parse(userJson) : null;
+      const token = authStorage.getToken();
+      const user = authStorage.getUser();
       
-      socketInstance = io('http://localhost:5000', {
+      socketInstance = io(API_BASE_URL, {
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,

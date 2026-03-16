@@ -5,10 +5,11 @@ import {
   Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine
 } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
-const API = 'http://localhost:5000/api';
-const token = () => sessionStorage.getItem('token');
-const headers = () => ({ Authorization: `Bearer ${token()}` });
+const API = API_URL;
+const headers = () => authStorage.getAuthHeaders();
 
 // ── tiny helpers ────────────────────────────────────────────────
 function Badge({ children, color = 'gray' }) {
@@ -172,7 +173,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
   // ── github connect ────────────────────────────────────────────
   const connectGitHub = async () => {
     try {
-      const appToken = sessionStorage.getItem('token');
+      const appToken = authStorage.getToken();
       if (appToken) localStorage.setItem('oauth_app_token', appToken);
 
       const res  = await fetch(`${API}/github/auth-url`);

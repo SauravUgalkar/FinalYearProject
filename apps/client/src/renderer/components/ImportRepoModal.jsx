@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Github, X, Search, Lock, Unlock, Star, RefreshCw, Download, AlertCircle } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
-const API = 'http://localhost:5000/api';
-const token = () => sessionStorage.getItem('token');
-const headers = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` });
+const API = API_URL;
+const headers = () => authStorage.getAuthHeaders({ 'Content-Type': 'application/json' });
 
 export default function ImportRepoModal({ isOpen, onClose, onImported }) {
   const [repos, setRepos] = useState([]);
@@ -49,7 +50,7 @@ export default function ImportRepoModal({ isOpen, onClose, onImported }) {
 
   const connectGitHub = async () => {
     try {
-      const appToken = sessionStorage.getItem('token');
+      const appToken = authStorage.getToken();
       if (appToken) {
         localStorage.setItem('oauth_app_token', appToken);
       }

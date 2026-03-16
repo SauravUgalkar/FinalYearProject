@@ -9,8 +9,16 @@ const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const IORedis = require("ioredis");
 const { Queue, QueueEvents } = require("bullmq");
+const morgan = require('morgan');
 const Project = require("./models/Project");
 const Submission = require("./models/Submission");
+const logger = require('./utils/logger');
+const { reportError } = require('./utils/errorReporter');
+
+const ANALYTICS_LIMITS = {
+  MAX_ANALYTICS_ENTRIES: Number(process.env.MAX_ANALYTICS_ENTRIES || 200),
+  MAX_EXECUTION_TIMES: Number(process.env.MAX_EXECUTION_TIMES || 200),
+};
 
 // -----------------------------------------------------------------------------
 // ENV VALIDATION (FAIL FAST)
@@ -20,7 +28,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
 if (!MONGODB_URI) {
-  console.error("❌ MONGODB_URI is not defined in .env");
+  logger.error("MONGODB_URI is not defined in environment");
   process.exit(1);
 }
 
@@ -29,6 +37,28 @@ if (!MONGODB_URI) {
 // -----------------------------------------------------------------------------
 const app = express();
 const server = http.createServer(app);
+
+// Security middleware
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+// Helmet for secure HTTP headers
+app.use(helmet());
+
+app.use(morgan('combined', {
+  stream: {
+    write: (message) => logger.info(message.trim()),
+  },
+}));
+
+// Rate limiting for API endpoints
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/', apiLimiter);
 
 // Parse CORS origins from environment variable
 const corsOrigins = process.env.CORS_ORIGIN
@@ -51,14 +81,32 @@ app.set('io', io);
 // -----------------------------------------------------------------------------
 // MIDDLEWARE
 // -----------------------------------------------------------------------------
+const cookieParser = require('cookie-parser');
+app.use(cookieParser());
+
 app.use(
   cors({
     origin: corsOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 200,
   })
 );
+
+// Secure cookie options for production
+app.use((req, res, next) => {
+  res.cookie = ((orig) => (name, value, options = {}) => {
+    // Enforce secure cookies in production
+    if (process.env.NODE_ENV === 'production') {
+      options.secure = true;
+      options.sameSite = 'strict';
+      options.httpOnly = true;
+    }
+    return orig.call(res, name, value, options);
+  })(res.cookie);
+  next();
+});
 
 // Explicitly handle preflight requests
 app.options("*", cors());
@@ -111,6 +159,9 @@ const persistAnalyticsForJob = async (jobInfo, status, executionTime = 0) => {
     );
 
     if (!userAnalytics) {
+      if (project.analytics.length >= ANALYTICS_LIMITS.MAX_ANALYTICS_ENTRIES) {
+        project.analytics = project.analytics.slice(-(ANALYTICS_LIMITS.MAX_ANALYTICS_ENTRIES - 1));
+      }
       userAnalytics = {
         userId: jobInfo.userId,
         userName: jobInfo.userName || "Unknown",
@@ -131,6 +182,9 @@ const persistAnalyticsForJob = async (jobInfo, status, executionTime = 0) => {
       userAnalytics.successfulRuns += 1;
       if (typeof executionTime === "number") {
         userAnalytics.executionTimes.push(executionTime);
+        if (userAnalytics.executionTimes.length > ANALYTICS_LIMITS.MAX_EXECUTION_TIMES) {
+          userAnalytics.executionTimes = userAnalytics.executionTimes.slice(-ANALYTICS_LIMITS.MAX_EXECUTION_TIMES);
+        }
       }
     } else {
       userAnalytics.failedRuns += 1;
@@ -655,7 +709,11 @@ io.on("connection", (socket) => {
 // GLOBAL ERROR HANDLER
 // -----------------------------------------------------------------------------
 app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err);
+  reportError(err, {
+    scope: 'express',
+    method: req.method,
+    path: req.originalUrl,
+  });
   res.status(500).json({ error: "Internal Server Error" });
 });
 
@@ -663,22 +721,24 @@ app.use((err, req, res, next) => {
 // START SERVER
 // -----------------------------------------------------------------------------
 server.listen(PORT, () => {
-  console.log(`CollabCode Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  logger.info('CollabCode Server started', {
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+  });
 });
 
 // -----------------------------------------------------------------------------
 // GRACEFUL SHUTDOWN
 // -----------------------------------------------------------------------------
 const shutdown = async () => {
-  console.log("\nShutting down gracefully...");
+  logger.info('Shutting down gracefully');
 
   try {
     await queueEvents.close();
     await redisClient.quit();
     await mongoose.connection.close();
   } catch (err) {
-    console.error("Shutdown error:", err);
+    await reportError(err, { scope: 'shutdown' });
   } finally {
     process.exit(0);
   }
@@ -686,5 +746,15 @@ const shutdown = async () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+process.on('unhandledRejection', async (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  await reportError(error, { scope: 'process.unhandledRejection' });
+});
+
+process.on('uncaughtException', async (error) => {
+  await reportError(error, { scope: 'process.uncaughtException' });
+  process.exit(1);
+});
 
 module.exports = { app, io, executionQueue };

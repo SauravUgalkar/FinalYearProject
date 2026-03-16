@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, X, Github, LogIn } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function ExportModal({ isOpen, onClose, projectId, files, projectName }) {
   const [exportFormat, setExportFormat] = useState('json');
@@ -86,12 +88,12 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
         .replace(/\s+/g, '-')
         .replace(/[^a-z0-9-]/g, '') || 'collabcode-project';
 
-      const authToken = sessionStorage.getItem('token');
+      const authToken = authStorage.getToken();
       if (!authToken) {
         throw new Error('You must be logged in to export to GitHub');
       }
 
-      let response = await fetch(`http://localhost:5000/api/github/export/${projectId}`, {
+      let response = await fetch(`${API_URL}/github/export/${projectId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -106,7 +108,7 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
         if (error.needsAuth && error.authUrl) {
           await startGithubLoginWithAuth(error.authUrl);
           // Retry export after linking
-          response = await fetch(`http://localhost:5000/api/github/export/${projectId}`, {
+          response = await fetch(`${API_URL}/github/export/${projectId}`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -141,13 +143,13 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
 
   const startGithubLogin = async () => {
     try {
-      const appToken = sessionStorage.getItem('token');
+      const appToken = authStorage.getToken();
       if (appToken) {
         localStorage.setItem('oauth_app_token', appToken);
       }
 
       setAuthLoading(true);
-      const res = await fetch('http://localhost:5000/api/github/auth-url');
+      const res = await fetch(`${API_URL}/github/auth-url`);
       const data = await res.json();
       if (data.authUrl) {
         // Open GitHub OAuth in a popup window
@@ -188,7 +190,7 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
   // Start GitHub OAuth with provided authUrl and attach Authorization header for token persistence
   const startGithubLoginWithAuth = async (authUrl) => {
     return new Promise((resolve) => {
-      const appToken = sessionStorage.getItem('token');
+      const appToken = authStorage.getToken();
       if (appToken) {
         localStorage.setItem('oauth_app_token', appToken);
       }

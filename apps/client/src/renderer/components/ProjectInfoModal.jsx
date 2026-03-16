@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, Users, Crown, Shield, User as UserIcon, Mail, Calendar, Code2, Info } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 /**
  * ProjectInfoModal Component
@@ -34,10 +36,9 @@ export default function ProjectInfoModal({ projectId, isOpen, onClose, currentUs
   const fetchProjectDetails = async () => {
     try {
       setLoading(true);
-      const token = sessionStorage.getItem('token');
       const response = await axios.get(
-        `http://localhost:5000/api/projects/${projectId}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${API_URL}/projects/${projectId}`,
+        { headers: authStorage.getAuthHeaders() }
       );
       setProject(response.data);
     } catch (error) {

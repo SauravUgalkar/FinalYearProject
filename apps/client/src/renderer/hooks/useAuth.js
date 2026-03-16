@@ -1,23 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authStorage } from '../services/authStorage';
 
 export function useAuthContext() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const storedUser = sessionStorage.getItem('user');
-    const token = sessionStorage.getItem('token');
+    const storedUser = authStorage.getUser();
+    const token = authStorage.getToken();
 
     if (storedUser && token) {
-      setUser(JSON.parse(storedUser));
+      setUser(storedUser);
     }
 
     setLoading(false);
   }, []);
 
   const logout = useCallback(() => {
-    sessionStorage.removeItem('user');
-    sessionStorage.removeItem('token');
+    authStorage.clearUser();
+    authStorage.clearToken();
     setUser(null);
   }, []);
 

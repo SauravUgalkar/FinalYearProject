@@ -34,6 +34,21 @@ redisClient.on('connect', () => {
 });
 
 const EXECUTION_DIR = '/tmp/code-execution';
+const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 10000);
+const MAX_CODE_CHARS = Number(process.env.MAX_CODE_CHARS || 200000);
+const MAX_INPUT_CHARS = Number(process.env.MAX_INPUT_CHARS || 10000);
+const MAX_FILES = Number(process.env.MAX_FILES || 50);
+const MAX_FILE_NAME_CHARS = Number(process.env.MAX_FILE_NAME_CHARS || 255);
+const MAX_FILE_CONTENT_CHARS = Number(process.env.MAX_FILE_CONTENT_CHARS || 200000);
+const MAX_TOTAL_FILE_CHARS = Number(process.env.MAX_TOTAL_FILE_CHARS || 1000000);
+const MAX_OUTPUT_CHARS = Number(process.env.MAX_OUTPUT_CHARS || 200000);
+const ALLOWED_LANGUAGES = new Set(['javascript', 'python', 'java', 'c', 'cpp', 'csharp']);
+
+const appendBoundedOutput = (current, chunk) => {
+  const next = current + chunk;
+  if (next.length <= MAX_OUTPUT_CHARS) return next;
+  return `${next.slice(0, MAX_OUTPUT_CHARS)}\n[output truncated]`;
+};
 
 const sanitizeRelativeFilePath = (filePath) => {
   const normalized = String(filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
@@ -155,24 +170,92 @@ const normalizeExecutionLanguage = (language, files, entryFileName) => {
   return firstFileLanguage || normalized || 'javascript';
 };
 
-const runCommandWithInput = (command, args, input, timeout = 10000, options = {}) => {
+const validateJobPayload = (data) => {
+  const payload = data || {};
+  const code = String(payload.code || '');
+  const input = String(payload.input || '');
+  const language = String(payload.language || '').trim();
+  const entryFileName = sanitizeRelativeFilePath(payload.entryFileName || '');
+  const filesInput = Array.isArray(payload.files) ? payload.files : [];
+
+  if (code.length > MAX_CODE_CHARS) {
+    throw new Error(`Code exceeds allowed size (${MAX_CODE_CHARS} chars).`);
+  }
+
+  if (input.length > MAX_INPUT_CHARS) {
+    throw new Error(`Input exceeds allowed size (${MAX_INPUT_CHARS} chars).`);
+  }
+
+  if (filesInput.length > MAX_FILES) {
+    throw new Error(`Too many files. Maximum allowed is ${MAX_FILES}.`);
+  }
+
+  let totalFileChars = 0;
+  const files = filesInput.map((file) => {
+    const name = sanitizeRelativeFilePath(file?.name || '');
+    const content = String(file?.content || '');
+
+    if (!name) {
+      throw new Error('One or more files have an invalid name.');
+    }
+
+    if (name.length > MAX_FILE_NAME_CHARS) {
+      throw new Error(`File name too long: ${name}`);
+    }
+
+    if (content.length > MAX_FILE_CONTENT_CHARS) {
+      throw new Error(`File content too large for ${name}.`);
+    }
+
+    totalFileChars += content.length;
+    return { name, content };
+  });
+
+  if (totalFileChars > MAX_TOTAL_FILE_CHARS) {
+    throw new Error(`Total file content exceeds allowed size (${MAX_TOTAL_FILE_CHARS} chars).`);
+  }
+
+  const normalizedLanguage = normalizeExecutionLanguage(language, files, entryFileName);
+  if (!ALLOWED_LANGUAGES.has(normalizedLanguage)) {
+    throw new Error(`Unsupported language: ${normalizedLanguage}`);
+  }
+
+  return {
+    code,
+    input,
+    files,
+    language: normalizedLanguage,
+    entryFileName,
+  };
+};
+
+const execWithLimits = (command, options = {}) => {
+  return execAsync(command, {
+    cwd: options.cwd,
+    timeout: EXECUTION_TIMEOUT_MS,
+    maxBuffer: MAX_OUTPUT_CHARS,
+  });
+};
+
+const runCommandWithInput = (command, args, input, timeout = EXECUTION_TIMEOUT_MS, options = {}) => {
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, {
-      shell: true,
+      shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: timeout,
       cwd: options.cwd,
+      killSignal: 'SIGKILL',
     });
 
     let stdout = '';
     let stderr = '';
 
     proc.stdout.on('data', (data) => {
-      stdout += data.toString();
+      stdout = appendBoundedOutput(stdout, data.toString());
     });
 
     proc.stderr.on('data', (data) => {
-      stderr += data.toString();
+      stderr = appendBoundedOutput(stderr, data.toString());
     });
 
     proc.on('close', (code) => {
@@ -211,8 +294,9 @@ const hasExt = (fname, ext) => String(fname || '').toLowerCase().endsWith(ext);
 const worker = new Worker('code-execution', async (job) => {
   console.log(`Processing job ${job.id}...`);
 
-  const { code, language, input, files = [], entryFileName } = job.data;
-  const executionLanguage = normalizeExecutionLanguage(language, files, entryFileName);
+  const payload = validateJobPayload(job.data);
+  const { code, language, input, files, entryFileName } = payload;
+  const executionLanguage = language;
   const jobId = job.id;
   const jobTag = `job_${jobId}`;
 
@@ -313,7 +397,7 @@ const worker = new Worker('code-execution', async (job) => {
 
         // Compile the active Java file; javac can compile sibling dependencies in the same directory.
         try {
-          await execAsync(`cd "${tempDir}" && javac "${entryJavaFileName}"`);
+          await execWithLimits(`javac "${entryJavaFileName}"`, { cwd: tempDir });
         } catch (compileErr) {
           finalResult = {
             status: 'compile-error',
@@ -353,11 +437,11 @@ const worker = new Worker('code-execution', async (job) => {
           compileCmd = `gcc ${srcPaths} -I "${tempDir}" -o "${mainExe}"`;
         } else {
           await fs.writeFile(path.join(tempDir, 'main.c'), code);
-          compileCmd = `cd "${tempDir}" && gcc main.c -o main`;
+          compileCmd = `gcc main.c -o main`;
         }
 
         try {
-          await execAsync(compileCmd);
+          await execWithLimits(compileCmd, { cwd: tempDir });
         } catch (compileErr) {
           finalResult = {
             status: 'compile-error',
@@ -400,11 +484,11 @@ const worker = new Worker('code-execution', async (job) => {
           compileCmd = `g++ ${srcPaths} -I "${tempDir}" -o "${mainExe}"`;
         } else {
           await fs.writeFile(path.join(tempDir, 'main.cpp'), code);
-          compileCmd = `cd "${tempDir}" && g++ main.cpp -o main`;
+          compileCmd = `g++ main.cpp -o main`;
         }
 
         try {
-          await execAsync(compileCmd);
+          await execWithLimits(compileCmd, { cwd: tempDir });
         } catch (compileErr) {
           finalResult = {
             status: 'compile-error',
@@ -434,7 +518,7 @@ const worker = new Worker('code-execution', async (job) => {
         await fs.writeFile(csFile, code);
 
         try {
-          await execAsync(`cd "${tempDir}" && csc "${csFile}"`);
+          await execWithLimits(`csc "${csFile}"`, { cwd: tempDir });
         } catch (compileErr) {
           finalResult = {
             status: 'compile-error',

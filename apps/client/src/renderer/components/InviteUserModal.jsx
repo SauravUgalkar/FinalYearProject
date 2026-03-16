@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { X, UserPlus, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 /**
  * InviteUserModal Component
@@ -23,18 +25,17 @@ export default function InviteUserModal({ isOpen, onClose, roomId, roomName, soc
     setLoading(true);
 
     try {
-      const token = sessionStorage.getItem('token');
-      const currentUser = JSON.parse(sessionStorage.getItem('user') || '{}');
+      const currentUser = authStorage.getUser() || {};
 
       // Send invite via API
       const response = await axios.post(
-        'http://localhost:5000/api/invites/send',
+        `${API_URL}/invites/send`,
         {
           roomId,
           userIdentifier: userIdentifier.trim()
         },
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 

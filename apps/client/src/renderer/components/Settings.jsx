@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { X, Shield, Trash2, Crown, User as UserIcon } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function Settings({ projectId, onClose }) {
   const [activeTab, setActiveTab] = useState('users'); // 'users' or 'general'
@@ -8,17 +10,16 @@ export default function Settings({ projectId, onClose }) {
   const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
-    const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+    const user = authStorage.getUser() || {};
     setCurrentUser(user);
     fetchProjectUsers();
   }, [projectId]);
 
   const fetchProjectUsers = async () => {
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.get(
-        `http://localhost:5000/api/projects/${projectId}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${API_URL}/projects/${projectId}`,
+        { headers: authStorage.getAuthHeaders() }
       );
       
       // Combine owner and collaborators
@@ -43,14 +44,13 @@ export default function Settings({ projectId, onClose }) {
 
   const handleChangeRole = async (userId, newRole) => {
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.post(
-        `http://localhost:5000/api/projects/${projectId}/share`,
+        `${API_URL}/projects/${projectId}/share`,
         { 
           email: projectUsers.find(u => (u._id || u.id) === userId)?.email,
           role: newRole 
         },
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: authStorage.getAuthHeaders() }
       );
       
       fetchProjectUsers();
@@ -65,10 +65,9 @@ export default function Settings({ projectId, onClose }) {
     if (!confirm('Remove this user from the project?')) return;
 
     try {
-      const token = sessionStorage.getItem('token');
       await axios.delete(
-        `http://localhost:5000/api/projects/${projectId}/collaborators/${userId}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${API_URL}/projects/${projectId}/collaborators/${userId}`,
+        { headers: authStorage.getAuthHeaders() }
       );
       
       fetchProjectUsers();

@@ -1,5 +1,12 @@
 const Project = require('../models/Project');
 
+const ROOM_LIMITS = {
+  MAX_PROJECT_FILES: Number(process.env.MAX_PROJECT_FILES || 200),
+  MAX_FILE_CONTENT_CHARS: Number(process.env.MAX_FILE_CONTENT_CHARS || 200000),
+  MAX_CHAT_HISTORY: Number(process.env.MAX_CHAT_HISTORY || 1000),
+  MAX_CHAT_MESSAGE_CHARS: Number(process.env.MAX_CHAT_MESSAGE_CHARS || 2000),
+};
+
 class RoomManager {
   constructor(io, redisClient, executionQueue) {
     this.io = io;
@@ -245,6 +252,13 @@ class RoomManager {
       return;
     }
 
+    if (typeof content === 'string' && content.length > ROOM_LIMITS.MAX_FILE_CONTENT_CHARS) {
+      socket.emit('error', {
+        message: `File content exceeds maximum allowed size (${ROOM_LIMITS.MAX_FILE_CONTENT_CHARS} chars).`
+      });
+      return;
+    }
+
     // Initialize line edits tracking
     if (!room.lineEdits) {
       room.lineEdits = {};
@@ -322,6 +336,13 @@ class RoomManager {
         return;
       }
 
+      if (room.codeState.files.length >= ROOM_LIMITS.MAX_PROJECT_FILES) {
+        socket.emit('error', {
+          message: `File limit reached (${ROOM_LIMITS.MAX_PROJECT_FILES}). Delete unused files before adding new ones.`
+        });
+        return;
+      }
+
       room.codeState.files.push({
         id: fileId || normalizedFileName,
         name: normalizedFileName,
@@ -348,7 +369,7 @@ class RoomManager {
             updatedAt: new Date(),
           },
         },
-        { new: false }
+        { new: false, runValidators: true }
       );
       console.log(`[RoomManager] Persisted ${room.codeState.files.length} files to MongoDB for room ${roomId}`);
     } catch (err) {
@@ -437,7 +458,7 @@ class RoomManager {
     const message = {
       userId: user.userId,
       userName: user.userName,
-      message: data.message || data.text,
+      message: String(data.message || data.text || '').slice(0, ROOM_LIMITS.MAX_CHAT_MESSAGE_CHARS),
       timestamp: new Date()
     };
 
@@ -446,9 +467,9 @@ class RoomManager {
     if (!room.chatHistory) room.chatHistory = [];
     room.chatHistory.push(message);
 
-    // Keep only last 100 messages
-    if (room.chatHistory.length > 100) {
-      room.chatHistory = room.chatHistory.slice(-100);
+    // Keep a bounded in-memory chat history
+    if (room.chatHistory.length > ROOM_LIMITS.MAX_CHAT_HISTORY) {
+      room.chatHistory = room.chatHistory.slice(-ROOM_LIMITS.MAX_CHAT_HISTORY);
     }
 
     // Persist chat message to Project for durability across sessions
@@ -456,10 +477,10 @@ class RoomManager {
       Project.findByIdAndUpdate(
         roomId,
         {
-          $push: { chatHistory: message },
+          $push: { chatHistory: { $each: [message], $slice: -ROOM_LIMITS.MAX_CHAT_HISTORY } },
           $set: { updatedAt: new Date() }
         },
-        { new: false }
+        { new: false, runValidators: true }
       ).catch(err => console.error('[RoomManager] Failed to persist chat message:', err.message));
     } catch (err) {
       console.error('[RoomManager] Chat persistence error:', err.message);
@@ -625,7 +646,7 @@ class RoomManager {
           })),
           updatedAt: new Date(),
         },
-      });
+      }, { runValidators: true });
       console.log(`[RoomManager] Persisted deletion - ${room.codeState.files.length} files remain in room ${roomId}`);
     } catch (err) {
       console.error('[RoomManager] Failed to persist file deletion:', err.message);

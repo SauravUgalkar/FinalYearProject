@@ -3,6 +3,8 @@ import axios from 'axios';
 import { useSocket } from '../hooks/useSocket';
 import { useAuthContext } from '../hooks/useAuth';
 import { Send } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function Chat({ roomId, onlineUsers = [] }) {
   const { socket } = useSocket();
@@ -33,9 +35,8 @@ export default function Chat({ roomId, onlineUsers = [] }) {
     // Fetch persisted chat history on mount
     const fetchHistory = async () => {
       try {
-        const token = sessionStorage.getItem('token');
-        const res = await axios.get(`http://localhost:5000/api/chat/project/${roomId}` , {
-          headers: { Authorization: `Bearer ${token}` }
+        const res = await axios.get(`${API_URL}/chat/project/${roomId}` , {
+          headers: authStorage.getAuthHeaders()
         });
         setMessages(res.data.chatHistory || []);
       } catch (err) {
@@ -98,7 +99,7 @@ export default function Chat({ roomId, onlineUsers = [] }) {
     console.log('[Chat Client] Room ID:', roomId);
 
     try {
-      const token = sessionStorage.getItem('token');
+      const token = authStorage.getToken();
       
       if (!token) {
         alert('Authentication token not found. Please login again.');
@@ -110,13 +111,12 @@ export default function Chat({ roomId, onlineUsers = [] }) {
         return;
       }
 
-      console.log('[Chat Client] Sending DELETE request to:', `http://localhost:5000/api/chat/project/${roomId}`);
+      console.log('[Chat Client] Sending DELETE request to:', `${API_URL}/chat/project/${roomId}`);
       
-      const response = await axios.delete(`http://localhost:5000/api/chat/project/${roomId}`, {
-        headers: { 
-          Authorization: `Bearer ${token}`,
+      const response = await axios.delete(`${API_URL}/chat/project/${roomId}`, {
+        headers: authStorage.getAuthHeaders({
           'Content-Type': 'application/json'
-        }
+        })
       });
       
       console.log('[Chat Client] Delete response:', response.data);

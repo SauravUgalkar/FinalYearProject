@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import LogoutConfirmModal from '../components/LogoutConfirmModal';
 import { disconnectSocket } from '../hooks/useSocket';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function Profile() {
   const navigate = useNavigate();
@@ -20,8 +22,8 @@ export default function Profile() {
     disconnectSocket();
     
     // Clear all session data
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    authStorage.clearToken();
+    authStorage.clearUser();
     localStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
@@ -35,10 +37,8 @@ export default function Profile() {
 
   const fetchProfile = async () => {
     try {
-      const token = sessionStorage.getItem('token');
-
-      const response = await axios.get('http://localhost:5000/api/auth/profile', {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await axios.get(`${API_URL}/auth/profile`, {
+        headers: authStorage.getAuthHeaders()
       });
 
       setUser(response.data);

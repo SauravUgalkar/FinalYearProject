@@ -1,10 +1,10 @@
 import axios from 'axios';
+import { API_URL } from '../config/runtime';
+import { authStorage } from './authStorage';
 
-const API = 'http://localhost:5000/api';
+const API = API_URL;
 
-const authHeaders = () => ({
-  Authorization: `Bearer ${sessionStorage.getItem('token') || ''}`,
-});
+const authHeaders = () => authStorage.getAuthHeaders();
 
 const get = async (url) => {
   const res = await axios.get(url, { headers: authHeaders() });

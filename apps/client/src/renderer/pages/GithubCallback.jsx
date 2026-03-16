@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function GithubCallback() {
   const navigate = useNavigate();
@@ -16,8 +18,8 @@ export default function GithubCallback() {
 
       try {
         // Include Authorization when available so server can persist token to user
-        const authToken = sessionStorage.getItem('token') || localStorage.getItem('oauth_app_token');
-        const res = await fetch('http://localhost:5000/api/github/callback', {
+        const authToken = authStorage.getToken() || localStorage.getItem('oauth_app_token');
+        const res = await fetch(`${API_URL}/github/callback`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

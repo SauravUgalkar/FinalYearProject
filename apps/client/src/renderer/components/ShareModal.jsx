@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { X, Trash2, Copy, Check } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function ShareModal({ projectId, isOpen, onClose, onProjectUpdated }) {
   const [email, setEmail] = useState('');
@@ -19,11 +21,10 @@ export default function ShareModal({ projectId, isOpen, onClose, onProjectUpdate
 
   const fetchCollaborators = async () => {
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.get(
-        `http://localhost:5000/api/projects/${projectId}/collaborators`,
+        `${API_URL}/projects/${projectId}/collaborators`,
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
       setCollaborators(response.data.collaborators);
@@ -46,12 +47,11 @@ export default function ShareModal({ projectId, isOpen, onClose, onProjectUpdate
     }
 
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.post(
-        `http://localhost:5000/api/projects/${projectId}/share`,
+        `${API_URL}/projects/${projectId}/share`,
         { email: email.toLowerCase().trim(), role },
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 
@@ -73,11 +73,10 @@ export default function ShareModal({ projectId, isOpen, onClose, onProjectUpdate
     if (!window.confirm('Remove this collaborator?')) return;
 
     try {
-      const token = sessionStorage.getItem('token');
       const response = await axios.delete(
-        `http://localhost:5000/api/projects/${projectId}/collaborators/${collaboratorId}`,
+        `${API_URL}/projects/${projectId}/collaborators/${collaboratorId}`,
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 

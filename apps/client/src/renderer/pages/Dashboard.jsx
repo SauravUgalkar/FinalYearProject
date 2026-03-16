@@ -8,6 +8,8 @@ import Navbar from '../components/Navbar';
 import LogoutConfirmModal from '../components/LogoutConfirmModal';
 import JoinRequestNotification from '../components/JoinRequestNotification';
 import { disconnectSocket, useSocket } from '../hooks/useSocket';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -27,7 +29,7 @@ export default function Dashboard() {
   });
 
   useEffect(() => {
-    const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+    const user = authStorage.getUser() || {};
     setCurrentUser(user);
   }, []);
 
@@ -40,8 +42,8 @@ export default function Dashboard() {
     disconnectSocket();
     
     // Clear all session data
-    sessionStorage.removeItem('token');
-    sessionStorage.removeItem('user');
+    authStorage.clearToken();
+    authStorage.clearUser();
     sessionStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
@@ -57,9 +59,8 @@ export default function Dashboard() {
 
   const fetchProjects = async () => {
     try {
-      const token = sessionStorage.getItem('token');
-      const response = await axios.get('http://localhost:5000/api/projects', {
-        headers: { Authorization: `Bearer ${token}` }
+      const response = await axios.get(`${API_URL}/projects`, {
+        headers: authStorage.getAuthHeaders()
       });
       setProjects(response.data);
     } catch (error) {
@@ -71,7 +72,7 @@ export default function Dashboard() {
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
-    const token = sessionStorage.getItem('token');
+    const token = authStorage.getToken();
     
     if (!token) {
       console.error('No token found');
@@ -82,13 +83,10 @@ export default function Dashboard() {
 
     try {
       const response = await axios.post(
-        'http://localhost:5000/api/projects',
+        `${API_URL}/projects`,
         formData,
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
+          headers: authStorage.getAuthHeaders({ 'Content-Type': 'application/json' }),
           timeout: 10000
         }
       );
@@ -106,9 +104,8 @@ export default function Dashboard() {
 
   const handleDeleteProject = async (projectId) => {
     try {
-      const token = sessionStorage.getItem('token');
-      await axios.delete(`http://localhost:5000/api/projects/${projectId}`, {
-        headers: { Authorization: `Bearer ${token}` }
+      await axios.delete(`${API_URL}/projects/${projectId}`, {
+        headers: authStorage.getAuthHeaders()
       });
       setProjects(projects.filter(p => p._id !== projectId));
     } catch (error) {

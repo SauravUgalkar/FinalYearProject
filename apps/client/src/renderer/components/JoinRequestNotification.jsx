@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Bell, X, Check, XCircle, Clock, Loader } from 'lucide-react';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
 
 /**
  * JoinRequestNotification Component
@@ -24,7 +26,7 @@ export default function JoinRequestNotification({ socket }) {
 
   // Fetch pending invites on mount
   useEffect(() => {
-    const token = sessionStorage.getItem('token');
+    const token = authStorage.getToken();
     setHasToken(!!token);
     if (token) {
       fetchPendingInvites();
@@ -76,16 +78,16 @@ export default function JoinRequestNotification({ socket }) {
 
   const fetchPendingInvites = async () => {
     try {
-      const token = sessionStorage.getItem('token');
+      const token = authStorage.getToken();
       if (!token) {
         setLoading(false);
         return;
       }
 
       const response = await axios.get(
-        'http://localhost:5000/api/invites/pending',
+        `${API_URL}/invites/pending`,
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 
@@ -102,14 +104,12 @@ export default function JoinRequestNotification({ socket }) {
 
   const handleAccept = async (invite) => {
     try {
-      const token = sessionStorage.getItem('token');
-
       // Accept the invite
       await axios.post(
-        `http://localhost:5000/api/invites/${invite._id}/accept`,
+        `${API_URL}/invites/${invite._id}/accept`,
         {},
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 
@@ -135,13 +135,11 @@ export default function JoinRequestNotification({ socket }) {
 
   const handleReject = async (inviteId) => {
     try {
-      const token = sessionStorage.getItem('token');
-
       await axios.post(
-        `http://localhost:5000/api/invites/${inviteId}/reject`,
+        `${API_URL}/invites/${inviteId}/reject`,
         {},
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 
@@ -160,23 +158,21 @@ export default function JoinRequestNotification({ socket }) {
     setIsValidating(true);
 
     try {
-      const token = sessionStorage.getItem('token');
-
       // Validate room ID and join
       await axios.post(
-        'http://localhost:5000/api/invites/validate-room-id',
+        `${API_URL}/invites/validate-room-id`,
         {
           roomId: roomId.trim(),
           inviteId: selectedInvite._id
         },
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: authStorage.getAuthHeaders()
         }
       );
 
       // Success - notify room and redirect
       if (socket) {
-        const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+        const user = authStorage.getUser() || {};
         socket.emit('user-joined-room-notification', {
           roomId: roomId.trim(),
           userId: user.id || user._id,
