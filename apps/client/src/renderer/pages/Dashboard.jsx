@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Plus, Folder, Trash2, Code2, Users, Info } from 'lucide-react';
+import { Plus, Folder, Trash2, Code2, Users, Info, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ShareModal from '../components/ShareModal';
 import ProjectInfoModal from '../components/ProjectInfoModal';
@@ -10,6 +10,8 @@ import JoinRequestNotification from '../components/JoinRequestNotification';
 import { disconnectSocket, useSocket } from '../hooks/useSocket';
 import { API_URL } from '../config/runtime';
 import { authStorage } from '../services/authStorage';
+
+const LANDING_BG = 'bg-[radial-gradient(circle_at_top_left,_rgba(34,211,238,0.18),_transparent_28%),radial-gradient(circle_at_80%_20%,_rgba(244,114,182,0.2),_transparent_24%),linear-gradient(135deg,_#020617_0%,_#0f172a_45%,_#111827_100%)]';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -47,9 +49,9 @@ export default function Dashboard() {
     sessionStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
-    // Navigate to login page with a small delay to ensure localStorage is cleared
+    // Navigate to landing page with a small delay to ensure session storage is cleared
     setTimeout(() => {
-      navigate('/login', { replace: true });
+      navigate('/', { replace: true });
     }, 100);
   };
 
@@ -113,12 +115,20 @@ export default function Dashboard() {
     }
   };
 
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate('/');
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+      <div className={`min-h-screen ${LANDING_BG} flex items-center justify-center`}>
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-400">Loading your projects...</p>
+          <p className="text-slate-300">Loading your projects...</p>
         </div>
       </div>
     );
@@ -234,58 +244,61 @@ export default function Dashboard() {
   const getProjectFilesCount = (project) => (Array.isArray(project?.files) ? project.files.length : 0);
 
   return (
-    <div className="min-h-screen bg-black">
+    <div className={`min-h-screen ${LANDING_BG} relative overflow-hidden`}>
+      <div className="pointer-events-none absolute left-8 top-24 h-48 w-48 rounded-full bg-cyan-400/10 blur-3xl" aria-hidden="true" />
+      <div className="pointer-events-none absolute right-8 top-16 h-56 w-56 rounded-full bg-fuchsia-400/10 blur-3xl" aria-hidden="true" />
+
       <Navbar showLogout={true} onLogout={handleLogout} />
       {/* Invite bell + panel (appears when this user has pending invites) */}
       <JoinRequestNotification socket={socket} />
       
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
+        
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-5xl font-bold text-white mb-2">
-            Your Workspace
-          </h1>
-          <p className="text-gray-400 text-lg">Create, collaborate, and learn code faster</p>
+          <p className="mb-3 inline-flex items-center rounded-full border border-cyan-300/20 bg-cyan-300/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100">
+            Dashboard
+          </p>
         </div>
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-blue-600 transition">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-6 backdrop-blur transition duration-300 hover:-translate-y-1 hover:border-cyan-300/35 hover:shadow-[0_16px_60px_rgba(14,165,233,0.2)]">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-400 text-sm font-medium">Total Projects</p>
+                <p className="text-slate-400 text-sm font-medium">Total Projects</p>
                 <p className="text-3xl font-bold text-white mt-2">{projects.length}</p>
               </div>
-              <div className="p-3 bg-blue-600 bg-opacity-20 rounded-lg">
-                <Folder className="text-blue-400" size={24} />
+              <div className="p-3 rounded-lg border border-cyan-300/20 bg-cyan-300/10">
+                <Folder className="text-cyan-300" size={24} />
               </div>
             </div>
           </div>
 
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-purple-600 transition">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-6 backdrop-blur transition duration-300 hover:-translate-y-1 hover:border-fuchsia-300/35 hover:shadow-[0_16px_60px_rgba(217,70,239,0.2)]">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-400 text-sm font-medium">Languages</p>
+                <p className="text-slate-400 text-sm font-medium">Languages</p>
                 <p className="text-3xl font-bold text-white mt-2">
                   {new Set(projects.map(p => p.language)).size}
                 </p>
               </div>
-              <div className="p-3 bg-purple-600 bg-opacity-20 rounded-lg">
-                <Code2 className="text-purple-400" size={24} />
+              <div className="p-3 rounded-lg border border-fuchsia-300/20 bg-fuchsia-300/10">
+                <Code2 className="text-fuchsia-300" size={24} />
               </div>
             </div>
           </div>
 
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-green-600 transition">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-6 backdrop-blur transition duration-300 hover:-translate-y-1 hover:border-emerald-300/35 hover:shadow-[0_16px_60px_rgba(16,185,129,0.2)]">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-gray-400 text-sm font-medium">Collaborations</p>
+                <p className="text-slate-400 text-sm font-medium">Collaborations</p>
                 <p className="text-3xl font-bold text-white mt-2">
                   {totalCollaborators}
                 </p>
               </div>
-              <div className="p-3 bg-green-600 bg-opacity-20 rounded-lg">
-                <Users className="text-green-400" size={24} />
+              <div className="p-3 rounded-lg border border-emerald-300/20 bg-emerald-300/10">
+                <Users className="text-emerald-300" size={24} />
               </div>
             </div>
           </div>
@@ -302,7 +315,7 @@ export default function Dashboard() {
         </div>
 
         {showNewProject && (
-          <div className="bg-gray-900 border border-gray-800 p-6 rounded-xl mb-8 shadow-xl">
+          <div className="mb-8 rounded-2xl border border-white/10 bg-slate-950/70 p-6 shadow-[0_16px_60px_rgba(2,6,23,0.45)] backdrop-blur">
             <h2 className="text-2xl font-bold text-white mb-6">Create New Project</h2>
             <form onSubmit={handleCreateProject} className="space-y-5">
               <div>
@@ -366,12 +379,12 @@ export default function Dashboard() {
           {projects.map(project => (
             <div 
               key={project._id} 
-              className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-blue-500 hover:shadow-2xl transition-all duration-300 group cursor-pointer transform hover:-translate-y-1"
+              className="group cursor-pointer rounded-2xl border border-white/10 bg-slate-950/70 p-6 shadow-[0_12px_40px_rgba(2,6,23,0.4)] backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-cyan-300/35 hover:shadow-[0_22px_80px_rgba(14,165,233,0.2)]"
               onClick={() => navigate(`/editor/${project._id}`)}
             >
               <div className="flex items-start justify-between mb-4">
-                <div className="p-3 bg-blue-600 bg-opacity-20 rounded-lg shadow-lg shadow-blue-900/30">
-                  <Folder className="text-blue-400" size={28} />
+                <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-3 shadow-lg shadow-cyan-900/20">
+                  <Folder className="text-cyan-300" size={28} />
                 </div>
                 <div className="flex gap-2">
                   {/* Info button - visible to all */}
@@ -409,26 +422,26 @@ export default function Dashboard() {
                 {project.name}
               </h3>
 
-              <p className="text-gray-400 text-sm mb-4 line-clamp-2">
+              <p className="mb-4 line-clamp-2 text-sm text-slate-300">
                 {project.description || 'No description provided'}
               </p>
 
               <div className="grid grid-cols-2 gap-2 mb-4">
-                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                <div className="rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2">
                   <p className="text-[11px] uppercase tracking-wide text-gray-500">Files</p>
                   <p className="text-sm font-semibold text-gray-200">{getProjectFilesCount(project)}</p>
                 </div>
-                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                <div className="rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2">
                   <p className="text-[11px] uppercase tracking-wide text-gray-500">Updated</p>
                   <p className="text-sm font-semibold text-gray-200">{formatRelativeTime(project.updatedAt || project.createdAt)}</p>
                 </div>
-                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                <div className="rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2">
                   <p className="text-[11px] uppercase tracking-wide text-gray-500">Active</p>
                   <p className="text-sm font-semibold text-gray-200">
                     {getProjectOnlineUsersCount(project)} online
                   </p>
                 </div>
-                <div className="bg-black-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                <div className="rounded-lg border border-white/10 bg-slate-900/70 px-3 py-2">
                   <p className="text-[11px] uppercase tracking-wide text-gray-500">Your Role</p>
                   <p className="text-sm font-semibold text-gray-200">{getProjectRoleLabel(project)}</p>
                 </div>
@@ -442,7 +455,7 @@ export default function Dashboard() {
         {projects.length === 0 && !showNewProject && (
           <div className="text-center py-20">
             <div className="max-w-md mx-auto">
-              <div className="p-4 bg-gray-900 border border-gray-800 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-6">
+              <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full border border-white/10 bg-slate-950/70 p-4 backdrop-blur">
                 <Folder className="text-gray-600" size={40} />
               </div>
               <h3 className="text-2xl font-bold text-white mb-3">No projects yet</h3>

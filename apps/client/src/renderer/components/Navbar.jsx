@@ -13,23 +13,20 @@ export default function Navbar({ showLogout = false, onLogout }) {
           onClick={() => navigate('/dashboard')}
           className="cursor-pointer hover:opacity-80 transition"
         >
-          <div className="text-2xl font-bold text-white">
-            CollabCode
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="CollabCode" className="h-12 w-12 object-contain rounded-xl" />
+            <div className="text-2xl font-bold text-white">
+              {user.name}'s Workspace
+            </div>
           </div>
         </div>
 
         <div className="flex items-center gap-6">
           <button
-            onClick={() => navigate('/dashboard')}
-            className="text-gray-300 hover:text-white transition"
-          >
-            Dashboard
-          </button>
-          <button
             onClick={() => navigate('/profile')}
             className="flex items-center gap-2 text-gray-300 hover:text-white transition"
           >
-            <User size={20} /> {user.name}
+            <User size={20} /> Profile
           </button>
           {showLogout && onLogout && (
             <button

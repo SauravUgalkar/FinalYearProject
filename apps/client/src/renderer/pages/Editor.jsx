@@ -29,6 +29,7 @@ export default function EditorPage() {
   const [runtimeError, setRuntimeError] = useState('');
   const [executionInput, setExecutionInput] = useState('');
   const [sidebarTab, setSidebarTab] = useState('files'); // 'files', 'chat', 'analytics', 'export', 'git', or 'settings'
+  const [unreadCounts, setUnreadCounts] = useState({});
   const [projectName, setProjectName] = useState('Untitled Project');
   const [projectOwnerId, setProjectOwnerId] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
@@ -82,6 +83,7 @@ export default function EditorPage() {
   const fallbackSyncRef = useRef({ timeoutId: null, pendingPayload: null });
   const roomStateHydratedRef = useRef(false); // Avoid first stale room-state wiping API-loaded files
   const apiFilesHydratedRef = useRef(false);
+  const lastUnreadEventKeyRef = useRef('');
 
   const sanitizeName = useCallback((rawPath) => String(rawPath || '').trim(), []);
   const normalizePath = useCallback((rawPath) => String(rawPath || '').trim().replace(/\/+$/, ''), []);
@@ -149,6 +151,22 @@ export default function EditorPage() {
     roomStateHydratedRef.current = false;
     apiFilesHydratedRef.current = false;
   }, [projectId]);
+
+  useEffect(() => {
+    setUnreadCounts({});
+  }, [projectId]);
+
+  useEffect(() => {
+    if (sidebarTab === 'chat') {
+      setUnreadCounts((prev) => {
+        if (!prev[projectId]) return prev;
+        return {
+          ...prev,
+          [projectId]: 0,
+        };
+      });
+    }
+  }, [sidebarTab, projectId]);
 
   // Load project files from server only; server is the source of truth.
   useEffect(() => {
@@ -1356,6 +1374,60 @@ export default function EditorPage() {
     return () => socket.off('execution-activity', handleExecutionActivity);
   }, [socket, projectOwnerId, currentUserId, fetchAllAnalytics]);
 
+  useEffect(() => {
+    if (!socket || !projectId) return;
+
+    const incrementUnread = ({ roomId, fromUserId, timestamp }) => {
+      if (String(roomId || '') !== String(projectId || '')) return;
+      if (sidebarTab === 'chat') return;
+      if (String(fromUserId || '') === String(currentUserId || '')) return;
+
+      const eventKey = `${roomId}:${fromUserId}:${new Date(timestamp || Date.now()).toISOString()}`;
+      if (lastUnreadEventKeyRef.current === eventKey) return;
+      lastUnreadEventKeyRef.current = eventKey;
+
+      setUnreadCounts((prev) => ({
+        ...prev,
+        [projectId]: (prev[projectId] || 0) + 1,
+      }));
+    };
+
+    const handleNewMessageNotification = (notification) => {
+      incrementUnread({
+        roomId: notification?.roomId,
+        fromUserId: notification?.fromUserId,
+        timestamp: notification?.timestamp,
+      });
+    };
+
+    const handleChatMessageReceived = (message) => {
+      incrementUnread({
+        roomId: message?.roomId || projectId,
+        fromUserId: message?.userId,
+        timestamp: message?.timestamp,
+      });
+    };
+
+    const handleChatCleared = (data) => {
+      if (data?.roomId && data.roomId !== projectId) return;
+      lastUnreadEventKeyRef.current = '';
+      setUnreadCounts((prev) => ({
+        ...prev,
+        [projectId]: 0,
+      }));
+    };
+
+    socket.on('new_message_notification', handleNewMessageNotification);
+    socket.on('chat-message-received', handleChatMessageReceived);
+    socket.on('chat-cleared', handleChatCleared);
+
+    return () => {
+      socket.off('new_message_notification', handleNewMessageNotification);
+      socket.off('chat-message-received', handleChatMessageReceived);
+      socket.off('chat-cleared', handleChatCleared);
+    };
+  }, [socket, projectId, sidebarTab, currentUserId]);
+
   // Listen for real-time code changes from collaborators
   React.useEffect(() => {
     if (!socket || !projectId) return;
@@ -1647,14 +1719,24 @@ export default function EditorPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [persistProjectFiles]);
 
+  const handleBack = useCallback(() => {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate('/dashboard');
+  }, [navigate]);
+
+  const unreadChatCount = unreadCounts[projectId] || 0;
+
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100">
       {/* Left Icon Sidebar */}
       <div className="w-16 bg-gray-900 border-r border-gray-800 flex flex-col items-center py-4 gap-4 shadow-lg">
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={handleBack}
           className="p-3 rounded-lg bg-gray-800 hover:bg-blue-600 text-gray-400 hover:text-white transition-all"
-          title="Back to Dashboard"
+          title="Go Back"
         >
           <ArrowLeft size={24} />
         </button>
@@ -1684,14 +1766,19 @@ export default function EditorPage() {
           </button>
           <button
             onClick={() => setSidebarTab('chat')}
-            className={`w-full flex justify-center p-3 rounded-lg transition-all ${
+            className={`relative w-full flex justify-center p-3 rounded-lg transition-all ${
               sidebarTab === 'chat'
                 ? 'bg-blue-600 text-white shadow-lg'
                 : 'text-gray-400 hover:text-white hover:bg-gray-800'
             }`}
-            title="Chat"
+            title={unreadChatCount > 0 ? `Chat (${unreadChatCount})` : 'Chat'}
           >
             <MessageCircle size={20} />
+            {unreadChatCount > 0 && sidebarTab !== 'chat' && (
+              <span className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-red-500 px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-white shadow-[0_0_0_2px_rgba(17,24,39,0.95)]">
+                {unreadChatCount}
+              </span>
+            )}
           </button>
           {projectOwnerId === currentUserId && (
             <button
@@ -1834,7 +1921,7 @@ export default function EditorPage() {
                 </p>
               </div>
               {/* Current User Badge */}
-              <UserBadge user={currentUser} />
+              {/* <UserBadge user={currentUser} /> */}
             </div>
             
             {/* Online Collaborators */}
@@ -1915,8 +2002,12 @@ export default function EditorPage() {
 
           {/* Editor Area */}
           <div className="flex-1 p-4 overflow-hidden flex flex-col">
-            {/* Theme Toggle Button */}
-            <div className="flex justify-end mb-2">
+            {/* Current user + theme controls above editor */}
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <UserBadge user={currentUser} />
+              </div>
+
               <button
                 onClick={() => setEditorTheme(prev => prev === 'vs-dark' ? 'light' : 'vs-dark')}
                 className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm flex items-center gap-2 transition"
@@ -1926,7 +2017,8 @@ export default function EditorPage() {
               </button>
             </div>
             
-            <div className="flex-1 rounded-lg border border-gray-800 overflow-hidden shadow-xl">
+            
+            <div className="flex-1 rounded-lg border border-cyan-400 overflow-hidden shadow-xl">
               {currentFile ? (
                 <Editor
                   key={currentFile.name}

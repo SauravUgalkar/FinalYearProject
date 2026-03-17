@@ -9,6 +9,8 @@ import Dashboard from './pages/Dashboard';
 import Editor from './pages/Editor';
 import Profile from './pages/Profile';
 import GithubCallback from './pages/GithubCallback';
+import LandingPage from './pages/LandingPage';
+import DocsPage from './pages/DocsPage';
 
 // Components
 
@@ -77,12 +79,20 @@ function App() {
     <Router>
       <Routes>
         <Route
+          path="/"
+          element={<LandingPage />}
+        />
+        <Route
           path="/login"
           element={<Login />}
         />
         <Route
           path="/register"
           element={user ? <Navigate to="/dashboard" /> : <Register />}
+        />
+        <Route
+          path="/docs"
+          element={<DocsPage />}
         />
         <Route
           path="/dashboard"
@@ -97,7 +107,6 @@ function App() {
           path="/profile"
           element={<ProtectedRoute element={<Profile />} user={user} />}
         />
-        <Route path="/" element={<Navigate to="/dashboard" />} />
       </Routes>
     </Router>
   );

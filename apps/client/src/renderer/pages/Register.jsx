@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import { API_URL } from '../config/runtime';
 import { authStorage } from '../services/authStorage';
+
+const LANDING_BG = 'bg-[radial-gradient(circle_at_top_left,_rgba(34,211,238,0.18),_transparent_28%),radial-gradient(circle_at_80%_20%,_rgba(244,114,182,0.2),_transparent_24%),linear-gradient(135deg,_#020617_0%,_#0f172a_45%,_#111827_100%)]';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -43,10 +46,32 @@ export default function Register() {
     }
   };
 
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate('/');
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center">
-      <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-full max-w-md">
-        <h1 className="text-3xl font-bold text-white mb-6 text-center">CollabCode</h1>
+    <div className={`min-h-screen ${LANDING_BG} relative flex items-center justify-center overflow-hidden`}>
+      <div className="absolute left-8 top-24 h-48 w-48 rounded-full bg-cyan-400/10 blur-3xl" aria-hidden="true" />
+      <div className="absolute right-8 top-16 h-56 w-56 rounded-full bg-fuchsia-400/10 blur-3xl" aria-hidden="true" />
+
+      <button
+        onClick={handleBack}
+        className="absolute left-6 top-6 z-10 inline-flex items-center gap-2 rounded-full border border-white/20 bg-slate-950/50 px-4 py-2 text-sm text-white backdrop-blur transition hover:bg-white/10"
+      >
+        <ArrowLeft size={16} />
+        Back
+      </button>
+
+      <div className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-slate-950/60 p-8 shadow-[0_24px_100px_rgba(15,23,42,0.6)] backdrop-blur">
+        <div className="flex flex-col items-center mb-6 gap-3">
+          <img src="/logo.png" alt="CollabCode" className="h-24 w-24 object-contain" />
+          <h1 className="text-3xl font-bold text-white">CollabCode</h1>
+        </div>
         <h2 className="text-gray-300 text-center mb-6">Create Account</h2>
         
         <form onSubmit={handleSubmit} className="space-y-4">
