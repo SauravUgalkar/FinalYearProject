@@ -28,8 +28,7 @@ yarn-error.log*
 *.swo
 *~
 
-# Electron
-electron-builder-effective-config.json
+
 
 # Redis/MongoDB
 redis_data/

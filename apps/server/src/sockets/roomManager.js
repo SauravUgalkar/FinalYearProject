@@ -1,4 +1,5 @@
 const Project = require('../models/Project');
+const { isProjectMember, loadProjectMemberContext } = require('../middleware/checkProjectMember');
 
 const ROOM_LIMITS = {
   MAX_PROJECT_FILES: Number(process.env.MAX_PROJECT_FILES || 200),
@@ -433,7 +434,7 @@ class RoomManager {
     return changedLines;
   }
 
-  handleChatMessage(socket, data) {
+  async handleChatMessage(socket, data) {
     const roomId = this.userRoomMap.get(socket.id);
     if (!roomId) {
       console.error(`[RoomManager] Chat error: Socket ${socket.id} not in any room. Active rooms: ${this.userRoomMap.size}, Known sockets: ${Array.from(this.userRoomMap.keys()).join(', ')}`);
@@ -455,7 +456,23 @@ class RoomManager {
       return;
     }
 
+    if (!user.userId) {
+      socket.emit('chat-error', { message: 'User identity missing for chat message.' });
+      socket.emit('error', { message: 'User identity missing for chat message.' });
+      return;
+    }
+
+    const membership = await loadProjectMemberContext(roomId, user.userId);
+    if (!membership.isMember) {
+      socket.emit('chat-error', { message: membership.error || 'Project membership required to send messages.' });
+      socket.emit('error', { message: membership.error || 'Project membership required to send messages.' });
+      return;
+    }
+
+    const project = membership.project;
+
     const message = {
+      roomId,
       userId: user.userId,
       userName: user.userName,
       message: String(data.message || data.text || '').slice(0, ROOM_LIMITS.MAX_CHAT_MESSAGE_CHARS),
@@ -486,8 +503,28 @@ class RoomManager {
       console.error('[RoomManager] Chat persistence error:', err.message);
     }
 
-    // Broadcast to all in room (including sender)
-    this.io.to(roomId).emit('chat-message-received', message);
+    // Broadcast only to verified project members in the room.
+    for (const [targetSocketId, roomUser] of room.users.entries()) {
+      if (!isProjectMember(project, roomUser?.userId)) {
+        continue;
+      }
+
+      const targetSocket = this.io.sockets.sockets.get(targetSocketId);
+      if (!targetSocket) {
+        continue;
+      }
+
+      targetSocket.emit('chat-message-received', message);
+
+      if (targetSocketId !== socket.id) {
+        targetSocket.emit('new_message_notification', {
+          roomId,
+          fromUserId: user.userId,
+          fromUserName: user.userName,
+          timestamp: message.timestamp,
+        });
+      }
+    }
   }
 
   handleCursorMove(socket, data) {

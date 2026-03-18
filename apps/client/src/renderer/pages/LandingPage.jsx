@@ -87,7 +87,7 @@ export default function LandingPage() {
               </div>
 
               <h2 className="text-5xl font-semibold leading-[1.05] tracking-tight text-white sm:text-6xl">
-               One workspace for coding, collaboration, and execution—built for modern developers and learners.
+               One workspace for modern developers and learners.
               </h2>
 
               <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
@@ -155,6 +155,47 @@ export default function LandingPage() {
               {features.map((feature) => (
                 <FeatureCard key={feature.title} {...feature} />
               ))}
+            </div>
+          </section>
+
+          <section className="mt-24 rounded-[2rem] border border-white/10 bg-white/[0.04] px-6 py-10 shadow-[0_18px_80px_rgba(2,6,23,0.34)] backdrop-blur sm:px-10">
+            <div className="mb-10 max-w-3xl">
+              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-cyan-200/80">Built for real-world workflows</p>
+              <h3 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                Interview, pair-program, and teach in one shared coding space.
+              </h3>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-3">
+              <article className="group rounded-3xl border border-cyan-300/20 bg-cyan-300/5 p-6 transition duration-300 hover:-translate-y-1 hover:border-cyan-300/40 hover:bg-cyan-300/10">
+                <div className="mb-4 inline-flex rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-cyan-100">
+                  <MessageSquare size={20} />
+                </div>
+                <h4 className="text-xl font-semibold text-white">Live Technical Interviews and Hiring Rounds</h4>
+                <p className="mt-3 text-sm leading-7 text-slate-300">
+                  Recruiters and HR teams can create private projects and invite candidates to solve tasks in real time. Review live presence, synchronized typing, and use integrated chat to provide hints and guidance during coding rounds.
+                </p>
+              </article>
+
+              <article className="group rounded-3xl border border-fuchsia-300/20 bg-fuchsia-300/5 p-6 transition duration-300 hover:-translate-y-1 hover:border-fuchsia-300/40 hover:bg-fuchsia-300/10">
+                <div className="mb-4 inline-flex rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 p-3 text-fuchsia-100">
+                  <Sparkles size={20} />
+                </div>
+                <h4 className="text-xl font-semibold text-white">Real-Time Collaborative Development</h4>
+                <p className="mt-3 text-sm leading-7 text-slate-300">
+                  Think of it as Google Docs for Code. Yjs sync events provide conflict-free, instant merging so multiple developers can type at once without losing changes, making it ideal for pair programming and distributed teamwork.
+                </p>
+              </article>
+
+              <article className="group rounded-3xl border border-emerald-300/20 bg-emerald-300/5 p-6 transition duration-300 hover:-translate-y-1 hover:border-emerald-300/40 hover:bg-emerald-300/10">
+                <div className="mb-4 inline-flex rounded-2xl border border-emerald-300/25 bg-emerald-300/10 p-3 text-emerald-100">
+                  <FolderTree size={20} />
+                </div>
+                <h4 className="text-xl font-semibold text-white">Classroom Programming and Lab Assignments</h4>
+                <p className="mt-3 text-sm leading-7 text-slate-300">
+                  Teachers can distribute coding tasks and manage participation through RBAC. Use Admin for full control and lecture flow, Editor for active student coding, and Viewer for observation-focused sessions.
+                </p>
+              </article>
             </div>
           </section>
 

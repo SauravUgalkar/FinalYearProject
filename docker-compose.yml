@@ -66,6 +66,19 @@ services:
     networks:
       - collab-network
 
+  client:
+    build:
+      context: ./apps/client
+      dockerfile: Dockerfile
+    container_name: collab-code-client
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    networks:
+      - collab-network
+
 volumes:
   mongodb_data:
   redis_data:

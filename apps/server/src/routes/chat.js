@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const Project = require('../models/Project');
 const jwt = require('jsonwebtoken');
+const { checkProjectMember } = require('../middleware/checkProjectMember');
 
 // Simple auth middleware
 const verifyToken = (req, res, next) => {
@@ -21,11 +21,11 @@ const verifyToken = (req, res, next) => {
 };
 
 // Get chat history for a project
-router.get('/project/:projectId', verifyToken, async (req, res) => {
+router.get('/project/:projectId', verifyToken, checkProjectMember(), async (req, res) => {
   try {
     const { projectId } = req.params;
     console.log('[Chat] GET chat history for project:', projectId);
-    const project = await Project.findById(projectId).select('chatHistory').lean();
+    const project = req.project;
     if (!project) {
       console.log('[Chat] Project not found:', projectId);
       return res.status(404).json({ error: 'Project not found' });
@@ -38,12 +38,12 @@ router.get('/project/:projectId', verifyToken, async (req, res) => {
 });
 
 // Clear all chat messages for a project (Owner/Admin only)
-router.delete('/project/:projectId', verifyToken, async (req, res) => {
+router.delete('/project/:projectId', verifyToken, checkProjectMember(), async (req, res) => {
   try {
     const { projectId } = req.params;
     console.log('[Chat] DELETE request for project:', projectId);
     
-    const project = await Project.findById(projectId);
+    const project = req.project;
     if (!project) {
       console.log('[Chat] Project not found for deletion:', projectId);
       return res.status(404).json({ error: 'Project not found' });
@@ -67,6 +67,7 @@ router.delete('/project/:projectId', verifyToken, async (req, res) => {
     if (io) {
       console.log('[Chat] Emitting chat-cleared event to room:', projectId);
       io.to(projectId).emit('chat-cleared', { 
+        roomId: projectId,
         message: 'Chat history has been cleared',
         clearedBy: req.userId,
         timestamp: new Date()

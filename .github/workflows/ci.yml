@@ -1,0 +1,130 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docker-compose-check:
+    runs-on: ubuntu-latest
+    env:
+      TRUSTED_CONTEXT: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Fork PR Notice (Secrets Skipped)
+        if: ${{ env.TRUSTED_CONTEXT != 'true' }}
+        run: |
+          echo "Running in untrusted fork PR context."
+          echo "Secret-dependent integration steps are skipped for security."
+
+      - name: Validate Required Secrets
+        if: ${{ env.TRUSTED_CONTEXT == 'true' }}
+        run: |
+          required_vars=(
+            MONGODB_URI
+            JWT_SECRET
+            OAUTH_CLIENT_ID
+            OAUTH_CLIENT_SECRET
+            MONGO_INITDB_ROOT_USERNAME
+            MONGO_INITDB_ROOT_PASSWORD
+            MONGO_INITDB_DATABASE
+          )
+
+          for var in "${required_vars[@]}"; do
+            if [ -z "${!var}" ]; then
+              echo "Missing required GitHub secret: $var"
+              exit 1
+            fi
+          done
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          MONGO_INITDB_ROOT_USERNAME: ${{ secrets.MONGO_INITDB_ROOT_USERNAME }}
+          MONGO_INITDB_ROOT_PASSWORD: ${{ secrets.MONGO_INITDB_ROOT_PASSWORD }}
+          MONGO_INITDB_DATABASE: ${{ secrets.MONGO_INITDB_DATABASE }}
+
+      - name: Prepare CI Environment (.env)
+        if: ${{ env.TRUSTED_CONTEXT == 'true' }}
+        run: |
+          cat > .env <<EOF
+          NODE_ENV=production
+          PORT=5000
+          MONGODB_URI=${MONGODB_URI}
+          REDIS_URL=redis://redis:6379
+          JWT_SECRET=${JWT_SECRET}
+          GEMINI_API_KEY=${GEMINI_API_KEY}
+          GITHUB_CLIENT_ID=${OAUTH_CLIENT_ID}
+          GITHUB_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
+          MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
+          MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
+          MONGO_INITDB_DATABASE=${MONGO_INITDB_DATABASE}
+          EXECUTION_TIMEOUT_MS=10000
+          MAX_CODE_CHARS=200000
+          MAX_INPUT_CHARS=10000
+          MAX_FILES=50
+          MAX_FILE_NAME_CHARS=255
+          MAX_FILE_CONTENT_CHARS=200000
+          MAX_TOTAL_FILE_CHARS=1000000
+          MAX_OUTPUT_CHARS=200000
+          MAX_PROJECT_FILES=200
+          MAX_FILE_MODIFICATIONS=1000
+          MAX_ANALYTICS_ENTRIES=200
+          MAX_EXECUTION_TIMES=200
+          MAX_CHAT_HISTORY=1000
+          MAX_CHAT_MESSAGE_CHARS=2000
+          LOG_LEVEL=info
+          ERROR_REPORT_WEBHOOK_URL=
+          EOF
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+          MONGO_INITDB_ROOT_USERNAME: ${{ secrets.MONGO_INITDB_ROOT_USERNAME }}
+          MONGO_INITDB_ROOT_PASSWORD: ${{ secrets.MONGO_INITDB_ROOT_PASSWORD }}
+          MONGO_INITDB_DATABASE: ${{ secrets.MONGO_INITDB_DATABASE }}
+
+      - name: Validate Compose File
+        run: docker compose config --quiet
+
+      - name: Build Containers
+        if: ${{ env.TRUSTED_CONTEXT == 'true' }}
+        run: docker compose build
+
+      - name: Start Containers
+        if: ${{ env.TRUSTED_CONTEXT == 'true' }}
+        run: docker compose up -d
+
+      - name: Wait for API Health
+        if: ${{ env.TRUSTED_CONTEXT == 'true' }}
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent http://localhost:5000/api/health > /dev/null; then
+              echo "API is healthy"
+              exit 0
+            fi
+            echo "Waiting for API..."
+            sleep 5
+          done
+          echo "API did not become healthy in time"
+          docker compose logs
+          exit 1
+
+      - name: Show Running Containers
+        if: ${{ always() && env.TRUSTED_CONTEXT == 'true' }}
+        run: docker compose ps
+
+      - name: Show Container Logs
+        if: ${{ always() && env.TRUSTED_CONTEXT == 'true' }}
+        run: docker compose logs --no-color
+
+      - name: Stop Containers
+        if: ${{ always() && env.TRUSTED_CONTEXT == 'true' }}
+        run: docker compose down -v

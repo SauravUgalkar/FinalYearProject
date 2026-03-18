@@ -588,9 +588,9 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("chat-message", (data) => {
+  socket.on("chat-message", async (data) => {
     console.log(`[Socket] chat-message from socket ${socket.id}`);
-    roomManager.handleChatMessage(socket, data);
+    await roomManager.handleChatMessage(socket, data);
   });
 
   socket.on("cursor-move", (data) => {
