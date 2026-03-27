@@ -82,6 +82,8 @@ const projectSchema = new mongoose.Schema({
         id: String,
         message: String,
         author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        authorName: String,
+        branch: String,
         date: Date,
         files: [String],
         createdAt: { type: Date, default: Date.now }

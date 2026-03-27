@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   GitBranch, GitCommit, Plus, Check, X, RefreshCw, Upload, Download,
   Link2, AlertCircle, CheckCircle2, GitMerge, ChevronDown, ChevronRight,
-  Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine
+  Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine, Files, Users
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config/runtime';
@@ -59,6 +59,16 @@ function Divider() {
   return <div className="h-px bg-gray-800 mx-3" />;
 }
 
+function relativeTime(inputDate) {
+  const date = new Date(inputDate);
+  const diffMs = Date.now() - date.getTime();
+  if (Number.isNaN(diffMs)) return 'Unknown time';
+  if (diffMs < 60 * 1000) return 'just now';
+  if (diffMs < 60 * 60 * 1000) return `${Math.floor(diffMs / (60 * 1000))}m ago`;
+  if (diffMs < 24 * 60 * 60 * 1000) return `${Math.floor(diffMs / (60 * 60 * 1000))}h ago`;
+  return `${Math.floor(diffMs / (24 * 60 * 60 * 1000))}d ago`;
+}
+
 // ── main component ───────────────────────────────────────────────
 export default function GitControl({ projectId, onFilesChanged }) {
   const [status, setStatus] = useState({ staged: [], unstaged: [], untracked: [], branch: 'main', commits: [] });
@@ -78,12 +88,16 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const [newBranchName, setNewBranchName] = useState('');
 
   const [githubLinked, setGithubLinked] = useState(!!localStorage.getItem('github_token'));
+  const [commitHistory, setCommitHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [expandedCommits, setExpandedCommits] = useState({});
+  const [projectMembers, setProjectMembers] = useState([]);
 
   // toast  { type: 'success'|'error'|'info', text }
   const [toast, setToast] = useState(null);
 
   // collapsed sections: by default all open
-  const [open, setOpen] = useState({ connect: true, stage: true, sync: true, branches: true, history: false });
+  const [open, setOpen] = useState({ connect: true, stage: true, sync: true, branches: true, members: false, history: false });
   const toggle = (key) => setOpen((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const showToast = (type, text) => {
@@ -117,8 +131,57 @@ export default function GitControl({ projectId, onFilesChanged }) {
     }
   }, [projectId]);
 
+  const fetchCommitHistory = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setHistoryLoading(true);
+      const res = await axios.get(`${API}/git/${projectId}/commits`, { headers: headers() });
+      const commits = Array.isArray(res.data) ? res.data : [];
+      setCommitHistory(commits);
+    } catch {
+      if (!silent) setCommitHistory([]);
+    } finally {
+      if (!silent) setHistoryLoading(false);
+    }
+  }, [projectId]);
+
+  const fetchProjectMembers = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/projects/${projectId}`, { headers: headers() });
+      const owner = res?.data?.owner
+        ? [{
+            id: res.data.owner._id || String(res.data.owner),
+            name: res.data.owner.name || 'Owner',
+            email: res.data.owner.email || '',
+            role: 'owner',
+          }]
+        : [];
+      const collaborators = Array.isArray(res?.data?.collaborators)
+        ? res.data.collaborators.map((member) => ({
+            id: member.userId || member._id || member.email,
+            name: member.name || member.email || 'Collaborator',
+            email: member.email || '',
+            role: member.role || 'editor',
+          }))
+        : [];
+
+      const deduped = [...owner, ...collaborators].reduce((acc, member) => {
+        const key = String(member.id || `${member.name}-${member.email}`);
+        if (!acc.some((item) => String(item.id || `${item.name}-${item.email}`) === key)) {
+          acc.push(member);
+        }
+        return acc;
+      }, []);
+
+      setProjectMembers(deduped);
+    } catch {
+      setProjectMembers([]);
+    }
+  }, [projectId]);
+
   useEffect(() => { fetchGitStatus(); }, [fetchGitStatus]);
   useEffect(() => { fetchBranches(); },  [fetchBranches]);
+  useEffect(() => { fetchCommitHistory(); }, [fetchCommitHistory]);
+  useEffect(() => { fetchProjectMembers(); }, [fetchProjectMembers]);
 
   // Keep status fresh so Stage & Commit detects new/edited files quickly.
   useEffect(() => {
@@ -127,6 +190,13 @@ export default function GitControl({ projectId, onFilesChanged }) {
     }, 4000);
     return () => clearInterval(timer);
   }, [fetchGitStatus]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetchCommitHistory({ silent: true });
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [fetchCommitHistory]);
 
   // ── staging ───────────────────────────────────────────────────
   const stage = async (files) => {
@@ -163,6 +233,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
     try {
       const res = await axios.post(`${API}/git/${projectId}/commit`, { message: commitMessage }, { headers: headers() });
       setStatus(res.data.gitStatus);
+      fetchCommitHistory({ silent: true });
       setCommitMessage('');
       showToast('success', 'Committed successfully.');
     } catch (err) {
@@ -217,6 +288,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
       const res = await axios.post(`${API}/git/${projectId}/pull`, { remote: remoteUrl || undefined }, { headers: headers() });
       showToast('success', res.data.message || 'Pull successful.');
       fetchGitStatus();
+      fetchCommitHistory({ silent: true });
       if (onFilesChanged && res.data.files) onFilesChanged(res.data.files);
     } catch (err) {
       if (err.response?.data?.needsAuth) connectGitHub();
@@ -236,6 +308,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
       );
       showToast('success', res.data.message || 'Push successful.');
       fetchGitStatus();
+      fetchCommitHistory({ silent: true });
     } catch (err) {
       if (err.response?.data?.needsAuth) connectGitHub();
       else showToast('error', err.response?.data?.error || 'Push failed.');
@@ -272,6 +345,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const changedFiles  = [...(status.unstaged || []), ...(status.untracked || [])];
   const totalChanged  = changedFiles.length;
   const totalStaged   = status.staged?.length || 0;
+  const effectiveHistory = commitHistory.length ? commitHistory : (status.commits || []);
   const remoteShort   = remoteUrl ? remoteUrl.replace('https://github.com/', '') : null;
 
   // ── loading skeleton ─────────────────────────────────────────
@@ -300,7 +374,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
             : <WifiOff size={13} className="text-gray-500" title="Not connected" />
           }
           <button
-            onClick={() => { fetchGitStatus(); fetchBranches(); }}
+            onClick={() => { fetchGitStatus(); fetchBranches(); fetchCommitHistory(); fetchProjectMembers(); }}
             className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
             title="Refresh"
           >
@@ -568,8 +642,8 @@ export default function GitControl({ projectId, onFilesChanged }) {
 
               {/* Workflow tip */}
               <div className="bg-black-900/60 border border-black-800 rounded-lg px-3 py-2.5 space-y-1">
-                <p className="text-[11px] font-semibold text-black-400 uppercase tracking-wider">Recommended Workflow</p>
-                <ol className="text-[11px] text-black-500 space-y-0.5 list-decimal list-inside">
+                <p className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Recommended Workflow</p>
+                <ol className="text-[11px] text-gray-400 space-y-0.5 list-decimal list-inside">
                   <li>Pull latest changes from GitHub</li>
                   <li>Make edits in the editor</li>
                   <li>Stage &amp; Commit (Section 2)</li>
@@ -660,39 +734,67 @@ export default function GitControl({ projectId, onFilesChanged }) {
         </div>
 
         {/* ═══════════════════════════════════════════════
-            SECTION 5 — Commit History
+            SECTION 6 — Commit History
         ═══════════════════════════════════════════════ */}
-        {status.commits?.length > 0 && (
+        {(historyLoading || effectiveHistory.length > 0) && (
           <div className="mt-2 mx-2 rounded-xl border border-gray-800 overflow-hidden bg-[#161b22]">
             <SectionHeader
-              number="5" icon={Clock} color="teal"
+              number="6" icon={Clock} color="teal"
               title="Commit History"
               open={open.history} onToggle={() => toggle('history')}
-              badge={status.commits.length}
+              badge={effectiveHistory.length}
             />
             {open.history && (
               <div className="px-3 pb-3 space-y-2">
                 <Divider />
-                {status.commits.slice(0, 8).map((c, idx) => (
-                  <div key={c.id || idx} className="flex gap-3 px-2 py-2 rounded-lg hover:bg-gray-900/60 transition group">
-                    <div className="flex flex-col items-center pt-1">
-                      <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
-                      {idx < Math.min(status.commits.length - 1, 7) && (
-                        <div className="w-px flex-1 bg-gray-800 mt-1" />
+                {historyLoading && (
+                  <div className="text-xs text-gray-500 px-2 py-1">Loading commit history…</div>
+                )}
+                {!historyLoading && effectiveHistory.length === 0 && (
+                  <div className="text-xs text-gray-500 px-2 py-1">No commits yet.</div>
+                )}
+                {effectiveHistory.slice(0, 20).map((c, idx) => {
+                  const commitId = c.id || `${idx}`;
+                  const isOpen = Boolean(expandedCommits[commitId]);
+                  const files = Array.isArray(c.files) ? c.files : [];
+                  return (
+                    <div key={commitId} className="rounded-lg border border-gray-800 bg-black/60 overflow-hidden">
+                      <button
+                        onClick={() => setExpandedCommits((prev) => ({ ...prev, [commitId]: !isOpen }))}
+                        className="w-full flex gap-3 px-2.5 py-2.5 hover:bg-gray-400/60 transition text-left"
+                      >
+                        <div className="flex flex-col items-center pt-1">
+                          <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-white truncate font-medium">{c.message || 'No message'}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
+                            <span className="inline-flex items-center gap-1"><Clock size={9} /> {relativeTime(c.date)}</span>
+                            <span>{c.date ? new Date(c.date).toLocaleString() : 'Unknown date'}</span>
+                            <Badge color="gray">{c.authorName || 'Unknown User'}</Badge>
+                            <Badge color="blue"><GitBranch size={10} /> {c.branch || status.branch || 'main'}</Badge>
+                            {c.id && <span className="font-mono text-gray-500">{c.id.slice(0, 7)}</span>}
+                            <span className="inline-flex items-center gap-1 text-teal-300"><Files size={10} /> {files.length} files</span>
+                          </div>
+                        </div>
+                        {isOpen ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
+                      </button>
+                      {isOpen && (
+                        <div className="px-3 pb-3 pt-1 border-t border-gray-800 bg-gray-900/40 space-y-1.5">
+                          <p className="text-[11px] uppercase tracking-wider text-gray-500">Changed files</p>
+                          {files.length === 0 && (
+                            <p className="text-xs text-gray-500">No file details stored for this commit.</p>
+                          )}
+                          {files.map((fileName, fileIdx) => (
+                            <div key={`${commitId}-${fileName}-${fileIdx}`} className="px-2 py-1.5 rounded bg-gray-950 border border-gray-800 text-xs text-gray-300 truncate">
+                              {fileName}
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
-                    <div className="flex-1 min-w-0 pb-1">
-                      <p className="text-xs text-white truncate font-medium">{c.message}</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5 flex items-center gap-1">
-                        <Clock size={9} />
-                        {new Date(c.date).toLocaleString()}
-                        {c.id && (
-                          <span className="font-mono text-gray-600 ml-1">· {c.id.slice(0, 7)}</span>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

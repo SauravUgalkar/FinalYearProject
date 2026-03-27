@@ -376,6 +376,8 @@ router.post('/:projectId/commit', verifyToken, async (req, res) => {
       id: hashResult.success ? (hashResult.stdout || Date.now().toString()) : Date.now().toString(),
       message: message.trim(),
       author: req.userId,
+      authorName: user?.name || 'Unknown User',
+      branch: project.gitStatus?.branch || 'main',
       date: new Date(),
       files: stagedFiles
     };
@@ -418,7 +420,37 @@ router.get('/:projectId/commits', verifyToken, async (req, res) => {
       return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
-    res.json(project.gitStatus?.commits || []);
+    const commits = Array.isArray(project.gitStatus?.commits) ? project.gitStatus.commits : [];
+
+    const uniqueAuthorIds = [...new Set(
+      commits
+        .map((commit) => commit?.author)
+        .filter(Boolean)
+        .map((id) => String(id))
+    )];
+
+    const users = uniqueAuthorIds.length
+      ? await User.find({ _id: { $in: uniqueAuthorIds } }).select('name').lean()
+      : [];
+
+    const authorNameById = new Map(users.map((user) => [String(user._id), user.name]));
+    const projectBranch = project.gitStatus?.branch || 'main';
+
+    const normalizedCommits = commits.map((commit) => {
+      const authorId = commit?.author ? String(commit.author) : null;
+      const resolvedAuthorName =
+        commit?.authorName ||
+        (authorId ? authorNameById.get(authorId) : null) ||
+        'Unknown User';
+
+      return {
+        ...commit.toObject?.() || commit,
+        authorName: resolvedAuthorName,
+        branch: commit?.branch || projectBranch,
+      };
+    });
+
+    res.json(normalizedCommits);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -596,6 +628,8 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
       id: Date.now().toString(),
       message: commitMsg,
       author: req.userId,
+      authorName: user?.name || 'Unknown User',
+      branch,
       date: new Date(),
       files: (project.files || []).filter(f => !f.name.endsWith('/')).map(f => f.name)
     };
