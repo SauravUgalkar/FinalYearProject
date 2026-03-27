@@ -52,11 +52,24 @@ app.use(morgan('combined', {
 }));
 
 // Rate limiting for API endpoints
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || (15 * 60 * 1000));
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 5000);
+
+const getRateLimitKey = (req) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const tokenKey = token ? token.slice(-24) : 'anonymous';
+  return `${req.ip}:${tokenKey}`;
+};
+
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getRateLimitKey,
+  message: { error: 'Too many requests. Please retry shortly.' },
+  skip: (req) => req.path === '/health',
 });
 app.use('/api/', apiLimiter);
 
@@ -72,6 +85,13 @@ const io = new Server(server, {
     origin: corsOrigins,
     credentials: true,
     methods: ["GET", "POST"],
+  },
+  // Increase heartbeat tolerance for transient network hiccups and GC pauses.
+  pingInterval: Number(process.env.SOCKET_PING_INTERVAL_MS || 25000),
+  pingTimeout: Number(process.env.SOCKET_PING_TIMEOUT_MS || 60000),
+  connectionStateRecovery: {
+    maxDisconnectionDuration: Number(process.env.SOCKET_RECOVERY_WINDOW_MS || 120000),
+    skipMiddlewares: true,
   },
 });
 
@@ -445,6 +465,12 @@ const yjsProvider = require("./sockets/yjsProvider");
 const RoomInvite = require("./models/RoomInvite");
 const roomManager = new RoomManager(io, redisClient, executionQueue);
 app.set('roomManager', roomManager);
+const SOCKET_DEBUG = process.env.SOCKET_DEBUG === 'true';
+const socketDebugLog = (...args) => {
+  if (SOCKET_DEBUG) {
+    console.log(...args);
+  }
+};
 
 io.on("connection", (socket) => {
   // Extract user identity from socket handshake
@@ -507,25 +533,25 @@ io.on("connection", (socket) => {
   });
 
   socket.on("code-change", async (data) => {
-    console.log(`[Socket] code-change from socket ${socket.id}`);
+    socketDebugLog(`[Socket] code-change from socket ${socket.id}`);
     await roomManager.handleCodeChange(socket, data);
   });
 
   // Yjs sync protocol for CRDT-based collaborative editing
   socket.on("yjs-sync", async (data) => {
-    console.log(`[Socket] yjs-sync from socket ${socket.id}`);
+    socketDebugLog(`[Socket] yjs-sync from socket ${socket.id}`);
     const { roomId, fileName, update } = data;
     
     if (!roomId || !fileName) return;
 
     try {
-      console.log(`[Yjs] Before apply - docId: ${roomId}:${fileName}, update length: ${update?.length}`);
+      socketDebugLog(`[Yjs] Before apply - docId: ${roomId}:${fileName}, update length: ${update?.length}`);
       
       // Apply the update to the shared document
       yjsProvider.applyUpdate(roomId, fileName, update);
       
       const currentContent = yjsProvider.getContent(roomId, fileName);
-      console.log(`[Yjs] After apply - content length: ${currentContent.length}, first 100 chars: ${currentContent.substring(0, 100)}`);
+      socketDebugLog(`[Yjs] After apply - content length: ${currentContent.length}`);
 
       // Persist latest content to MongoDB for durability
       try {
@@ -546,13 +572,13 @@ io.on("connection", (socket) => {
       
       // Broadcast ONLY the update to other clients (not the sender, not the full state)
       // This prevents duplication - sender already has their changes applied locally
-      console.log(`[Yjs] Broadcasting update to room ${roomId}, excluding socket ${socket.id}`);
+      socketDebugLog(`[Yjs] Broadcasting update to room ${roomId}, excluding socket ${socket.id}`);
       socket.to(roomId).emit("yjs-sync", {
         fileName,
         update: update  // Send the original update, not the full state
       });
       
-      console.log(`[Yjs] Broadcast complete for ${fileName} in room ${roomId}`);
+      socketDebugLog(`[Yjs] Broadcast complete for ${fileName} in room ${roomId}`);
     } catch (error) {
       console.error(`[Yjs] Error processing update:`, error);
     }

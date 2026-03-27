@@ -20,7 +20,9 @@ export function useSocket() {
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        reconnectionAttempts: 5,
+        // Keep trying to reconnect for long-running sessions.
+        reconnectionAttempts: Infinity,
+        timeout: 20000,
         auth: {
           token: token,
           userId: user?.id || user?._id,
@@ -28,6 +30,20 @@ export function useSocket() {
           userEmail: user?.email
         }
       });
+
+      const refreshSocketAuth = () => {
+        const refreshedToken = authStorage.getToken();
+        const refreshedUser = authStorage.getUser();
+        socketInstance.auth = {
+          token: refreshedToken,
+          userId: refreshedUser?.id || refreshedUser?._id,
+          userName: refreshedUser?.name,
+          userEmail: refreshedUser?.email,
+        };
+      };
+
+      socketInstance.on('reconnect_attempt', refreshSocketAuth);
+      socketInstance.on('connect_error', refreshSocketAuth);
       console.log('[useSocket] Socket instance created:', socketInstance.id, 'User:', user?.name);
     }
     return socketInstance;

@@ -84,6 +84,9 @@ export default function EditorPage() {
   const roomStateHydratedRef = useRef(false); // Avoid first stale room-state wiping API-loaded files
   const apiFilesHydratedRef = useRef(false);
   const lastUnreadEventKeyRef = useRef('');
+  const executionTimeoutRef = useRef(null);
+  const persistBackoffUntilRef = useRef(0);
+  const lastPersistWarnAtRef = useRef(0);
 
   const sanitizeName = useCallback((rawPath) => String(rawPath || '').trim(), []);
   const normalizePath = useCallback((rawPath) => String(rawPath || '').trim().replace(/\/+$/, ''), []);
@@ -208,8 +211,12 @@ export default function EditorPage() {
         isInitialLoad.current = true;
       } catch (err) {
         console.error('Error loading project from server:', err);
-        setFiles([]);
-        setCurrentFile(null);
+        const status = err?.response?.status;
+        // Preserve current editor state on transient failures (429/5xx/network).
+        if (status === 401 || status === 403 || status === 404) {
+          setFiles([]);
+          setCurrentFile(null);
+        }
       }
     };
 
@@ -323,29 +330,50 @@ export default function EditorPage() {
   }, []);
 
   const persistProjectFiles = useCallback(async (updatedFiles, options = {}) => {
-    const token = authStorage.getToken();
-    if (!token) return;
-
-    if (options.keepalive) {
-      await fetch(`${API_URL}/projects/${projectId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ files: updatedFiles }),
-        keepalive: true,
-      });
+    const now = Date.now();
+    if (persistBackoffUntilRef.current && now < persistBackoffUntilRef.current) {
       return;
     }
 
-    await axios.put(
-      `${API_URL}/projects/${projectId}`,
-      { files: updatedFiles },
-      {
-        headers: authStorage.getAuthHeaders()
+    const token = authStorage.getToken();
+    if (!token) return;
+
+    try {
+      if (options.keepalive) {
+        const response = await fetch(`${API_URL}/projects/${projectId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ files: updatedFiles }),
+          keepalive: true,
+        });
+
+        if (!response.ok && response.status === 429) {
+          persistBackoffUntilRef.current = Date.now() + 30000;
+        }
+        return;
       }
-    );
+
+      await axios.put(
+        `${API_URL}/projects/${projectId}`,
+        { files: updatedFiles },
+        {
+          headers: authStorage.getAuthHeaders()
+        }
+      );
+    } catch (err) {
+      if (err?.response?.status === 429) {
+        persistBackoffUntilRef.current = Date.now() + 30000;
+        if (Date.now() - lastPersistWarnAtRef.current > 15000) {
+          console.warn('[Save] Server rate limit reached. Backing off autosave for 30s.');
+          lastPersistWarnAtRef.current = Date.now();
+        }
+        return;
+      }
+      throw err;
+    }
   }, [projectId]);
 
   // Show Yjs sync notification
@@ -729,7 +757,7 @@ export default function EditorPage() {
   // Join room when component mounts or socket reconnects
   useEffect(() => {
     if (socket && projectId) {
-      const user = JSON.parse(sessionStorage.getItem('user') || '{}');
+      const user = authStorage.getUser() || {};
       console.log('Joining room:', projectId, 'with socket:', socket.id);
       
       const joinRoom = () => {
@@ -1285,6 +1313,16 @@ export default function EditorPage() {
     setCompileError('');
     setRuntimeError('');
 
+    // Prevent run button from getting stuck if execution events are lost.
+    if (executionTimeoutRef.current) {
+      clearTimeout(executionTimeoutRef.current);
+    }
+    executionTimeoutRef.current = setTimeout(() => {
+      setIsExecuting(false);
+      setWaitingForInput(false);
+      setRuntimeError('Execution timeout: no response received. Please run again.');
+    }, 45000);
+
     console.log('Executing code:', {
       language: currentFile.language,
       codeLength: currentFile.content?.length,
@@ -1315,6 +1353,10 @@ export default function EditorPage() {
     
     const handleExecutionResult = (data) => {
       console.log('[Execution] Result received:', data);
+      if (executionTimeoutRef.current) {
+        clearTimeout(executionTimeoutRef.current);
+        executionTimeoutRef.current = null;
+      }
       setExecutionOutput(data.output || '');
       setCompileError(data.compileError || '');
       setRuntimeError(data.runtimeError || '');
@@ -1331,6 +1373,10 @@ export default function EditorPage() {
 
     const handleExecutionError = (data) => {
       console.log('[Execution] Error received:', data);
+      if (executionTimeoutRef.current) {
+        clearTimeout(executionTimeoutRef.current);
+        executionTimeoutRef.current = null;
+      }
       setExecutionOutput(data.output || '');
       setCompileError(data.compileError || '');
       setRuntimeError(data.runtimeError || data.error || '');
@@ -1351,6 +1397,34 @@ export default function EditorPage() {
     return () => {
       socket.off('execution-result', handleExecutionResult);
       socket.off('execution-error', handleExecutionError);
+    };
+  }, [socket]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleConnectionProblem = (reason) => {
+      console.warn('[Socket] Connection issue detected:', reason);
+      if (executionTimeoutRef.current) {
+        clearTimeout(executionTimeoutRef.current);
+        executionTimeoutRef.current = null;
+      }
+      setIsExecuting(false);
+      setWaitingForInput(false);
+    };
+
+    socket.on('disconnect', handleConnectionProblem);
+    socket.on('connect_error', handleConnectionProblem);
+    socket.on('reconnect_failed', handleConnectionProblem);
+
+    return () => {
+      socket.off('disconnect', handleConnectionProblem);
+      socket.off('connect_error', handleConnectionProblem);
+      socket.off('reconnect_failed', handleConnectionProblem);
+      if (executionTimeoutRef.current) {
+        clearTimeout(executionTimeoutRef.current);
+        executionTimeoutRef.current = null;
+      }
     };
   }, [socket]);
 

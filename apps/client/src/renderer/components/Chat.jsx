@@ -111,12 +111,16 @@ export default function Chat({ roomId, onlineUsers = [] }) {
         return;
       }
 
+      console.log('[Chat Client] Token available, length:', token.length);
       console.log('[Chat Client] Sending DELETE request to:', `${API_URL}/chat/project/${roomId}`);
       
+      const headers = authStorage.getAuthHeaders({
+        'Content-Type': 'application/json'
+      });
+      console.log('[Chat Client] Request headers:', Object.keys(headers));
+      
       const response = await axios.delete(`${API_URL}/chat/project/${roomId}`, {
-        headers: authStorage.getAuthHeaders({
-          'Content-Type': 'application/json'
-        })
+        headers
       });
       
       console.log('[Chat Client] Delete response:', response.data);

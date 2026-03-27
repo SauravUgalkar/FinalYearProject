@@ -13,6 +13,12 @@ services:
       - mongodb_data:/data/db
     networks:
       - collab-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   redis:
     image: redis:7.2-alpine
@@ -25,6 +31,12 @@ services:
     networks:
       - collab-network
     command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   worker:
     build:
@@ -37,8 +49,10 @@ services:
       MONGODB_URI: ${MONGODB_URI}
       NODE_ENV: ${NODE_ENV}
     depends_on:
-      - redis
-      - mongodb
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
     networks:
       - collab-network
     # volumes:
@@ -61,10 +75,18 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       NODE_ENV: ${NODE_ENV}
     depends_on:
-      - redis
-      - mongodb
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
     networks:
       - collab-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   client:
     build:
@@ -75,7 +97,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - server
+      server:
+        condition: service_healthy
     networks:
       - collab-network
 
