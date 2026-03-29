@@ -9,6 +9,7 @@ const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const IORedis = require("ioredis");
 const { Queue, QueueEvents } = require("bullmq");
+const { ipKeyGenerator } = require("express-rate-limit");
 const morgan = require('morgan');
 const Project = require("./models/Project");
 const Submission = require("./models/Submission");
@@ -59,7 +60,7 @@ const getRateLimitKey = (req) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
   const tokenKey = token ? token.slice(-24) : 'anonymous';
-  return `${req.ip}:${tokenKey}`;
+  return `${ipKeyGenerator(req.ip)}:${tokenKey}`;
 };
 
 const apiLimiter = rateLimit({

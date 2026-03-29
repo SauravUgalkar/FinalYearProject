@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: collab-code-server
+    runtime: node
+    rootDir: apps/server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_REDIRECT_URI
+        sync: false
+
+  - type: worker
+    name: collab-code-worker
+    runtime: node
+    rootDir: apps/worker
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: EXECUTION_TIMEOUT_MS
+        value: 10000
+      - key: MAX_CODE_CHARS
+        value: 200000
+      - key: MAX_INPUT_CHARS
+        value: 10000
+      - key: MAX_FILES
+        value: 50
+      - key: MAX_FILE_CONTENT_CHARS
+        value: 200000
+      - key: MAX_TOTAL_FILE_CHARS
+        value: 1000000
+      - key: MAX_OUTPUT_CHARS
+        value: 200000
