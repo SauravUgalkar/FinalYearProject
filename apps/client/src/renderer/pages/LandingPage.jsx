@@ -62,7 +62,7 @@ export default function LandingPage() {
             <CollabCodeLogo />
             <div>
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.28em] text-cyan-200/80">
-                Collaborative Workspace
+                Collaborative space
               </div>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">CollabCode</h1>
             </div>
