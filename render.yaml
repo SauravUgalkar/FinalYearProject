@@ -29,10 +29,9 @@ services:
 
   - type: worker
     name: collab-code-worker
-    runtime: node
-    rootDir: apps/worker
-    buildCommand: npm install
-    startCommand: npm start
+    runtime: docker
+    dockerfilePath: apps/worker/Dockerfile
+    dockerContext: apps/worker
     autoDeploy: true
     envVars:
       - key: NODE_ENV
