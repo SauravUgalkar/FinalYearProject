@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Worker } = require('bullmq');
 const IORedis = require('ioredis');
 const { exec, spawn } = require('child_process');
+const http = require('http');
 const { promisify } = require('util');
 const fs = require('fs').promises;
 const path = require('path');
@@ -34,6 +35,7 @@ redisClient.on('connect', () => {
 });
 
 const EXECUTION_DIR = '/tmp/code-execution';
+const HEALTH_PORT = Number(process.env.PORT || 0);
 const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 10000);
 const MAX_CODE_CHARS = Number(process.env.MAX_CODE_CHARS || 200000);
 const MAX_INPUT_CHARS = Number(process.env.MAX_INPUT_CHARS || 10000);
@@ -605,9 +607,32 @@ setTimeout(() => {
   }
 }, 5000);
 
+// Optional health endpoint so the worker can run as a Render Web Service
+// when Background Worker is unavailable on the current plan.
+let healthServer = null;
+if (HEALTH_PORT > 0) {
+  healthServer = http.createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', service: 'worker', redisConnected }));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('collab-code-worker');
+  });
+
+  healthServer.listen(HEALTH_PORT, () => {
+    console.log(`🌐 Worker health server listening on port ${HEALTH_PORT}`);
+  });
+}
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down worker...');
+  if (healthServer) {
+    healthServer.close();
+  }
   await worker.close();
   if (redisConnected) {
     await redisClient.quit();
