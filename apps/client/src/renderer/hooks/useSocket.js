@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import io from 'socket.io-client';
-import { API_BASE_URL } from '../config/runtime';
+import { SOCKET_BASE_URL } from '../config/runtime';
 import { authStorage } from '../services/authStorage';
 
 let socketInstance = null;
@@ -16,7 +16,7 @@ export function useSocket() {
       const token = authStorage.getToken();
       const user = authStorage.getUser();
       
-      socketInstance = io(API_BASE_URL, {
+      socketInstance = io(SOCKET_BASE_URL, {
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
