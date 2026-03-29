@@ -1,35 +1,28 @@
-# Multi-stage build for safe code execution environment
 FROM node:18-alpine
 
-# Install language runtimes for multi-language support
+# Install runtimes and toolchain used by the execution worker.
 RUN apk add --no-cache \
-    python3 \
-    openjdk11 \
     bash \
     curl \
+    python3 \
+    openjdk11 \
     gcc \
     g++ \
     make \
-    musl-dev
+    musl-dev \
+    dumb-init
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json .
-COPY package-lock.json* .
+COPY package*.json ./
+RUN npm install --omit=dev
 
-# Install dependencies
-RUN npm install --only=production
-
-# Copy source code
 COPY src ./src
 
-# Create a non-root user for execution
-RUN adduser -D -g '' execuser
-
-# Set working directory for code execution
-RUN mkdir -p /code && chown execuser:execuser /code
+# Ensure temp execution paths exist and are writable by non-root user.
+RUN mkdir -p /tmp/code-execution && chown -R node:node /app /tmp/code-execution
 
 USER node
 
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "src/index.js"]
