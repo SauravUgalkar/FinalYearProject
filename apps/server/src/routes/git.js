@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 
 const execFileAsync = promisify(execFile);
 const WORKSPACE_ROOT = '/tmp/workspaces';
+const MAX_FILE_MODIFICATIONS = Number(process.env.MAX_FILE_MODIFICATIONS || 1000);
 
 // Only allow valid MongoDB ObjectIds as workspace directory names
 const isSafeId = (id) => /^[a-f0-9]{24}$/.test(String(id));
@@ -494,6 +495,16 @@ router.post('/:projectId/track-modification', verifyToken, async (req, res) => {
     const { projectId } = req.params;
     const { fileName, lineNumber, content, userName } = req.body;
 
+    const normalizedFileName = decodeURIComponent(String(fileName || '').trim());
+    const normalizedLineNumber = Number(lineNumber);
+    const normalizedUserName = String(userName || 'Unknown').slice(0, 120);
+    const normalizedContent = String(content || '').slice(0, 5000);
+
+    // This endpoint is best-effort metadata. Do not fail hard for invalid payloads.
+    if (!normalizedFileName || !Number.isFinite(normalizedLineNumber) || normalizedLineNumber < 1) {
+      return res.json({ success: false, skipped: true, reason: 'Invalid fileName/lineNumber' });
+    }
+
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
@@ -508,9 +519,10 @@ router.post('/:projectId/track-modification', verifyToken, async (req, res) => {
     }
 
     // Find the file
-    const file = project.files.find(f => f.name === fileName);
+    const file = project.files.find(f => f.name === normalizedFileName);
     if (!file) {
-      return res.status(404).json({ error: 'File not found' });
+      // File may have been renamed/deleted while typing; do not surface as client error.
+      return res.json({ success: false, skipped: true, reason: 'File not found' });
     }
 
     // Initialize modifications array if not exists
@@ -519,29 +531,49 @@ router.post('/:projectId/track-modification', verifyToken, async (req, res) => {
     }
 
     // Update or add modification for this line
-    const existingModIndex = file.modifications.findIndex(m => m.lineNumber === lineNumber);
+    const existingModIndex = file.modifications.findIndex(m => Number(m.lineNumber) === normalizedLineNumber);
     if (existingModIndex >= 0) {
       file.modifications[existingModIndex] = {
-        lineNumber,
+        lineNumber: normalizedLineNumber,
         userId: req.userId,
-        userName,
+        userName: normalizedUserName,
         timestamp: new Date(),
-        content
+        content: normalizedContent
       };
     } else {
       file.modifications.push({
-        lineNumber,
+        lineNumber: normalizedLineNumber,
         userId: req.userId,
-        userName,
+        userName: normalizedUserName,
         timestamp: new Date(),
-        content
+        content: normalizedContent
       });
+
+      // Keep bounded to avoid validation failures on large/high-frequency edits.
+      if (file.modifications.length > MAX_FILE_MODIFICATIONS) {
+        file.modifications = file.modifications
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+          .slice(file.modifications.length - MAX_FILE_MODIFICATIONS);
+      }
     }
 
-    await project.save();
+    // Save as best-effort metadata; avoid 500 spam under concurrent writes.
+    try {
+      await project.save();
+    } catch (saveError) {
+      const msg = String(saveError?.message || '');
+      const transient = msg.includes('VersionError') || msg.includes('No matching document found');
+      if (transient) {
+        return res.json({ success: false, skipped: true, reason: 'Concurrent update conflict' });
+      }
+      throw saveError;
+    }
+
     res.json({ success: true, modifications: file.modifications });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('[Git] track-modification failed:', error.message);
+    // Non-critical feature: return success:false to prevent client-side runtime noise.
+    res.json({ success: false, skipped: true, reason: error.message });
   }
 });
 

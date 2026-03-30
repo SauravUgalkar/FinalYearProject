@@ -88,6 +88,7 @@ export default function EditorPage() {
   const EXECUTION_RESPONSE_TIMEOUT_MS = Number(process.env.REACT_APP_EXECUTION_RESPONSE_TIMEOUT_MS || 120000);
   const persistBackoffUntilRef = useRef(0);
   const lastPersistWarnAtRef = useRef(0);
+  const lastTrackModificationWarnAtRef = useRef(0);
 
   const sanitizeName = useCallback((rawPath) => String(rawPath || '').trim(), []);
   const normalizePath = useCallback((rawPath) => String(rawPath || '').trim().replace(/\/+$/, ''), []);
@@ -477,6 +478,8 @@ export default function EditorPage() {
 
   // Track line modification
   const trackLineModification = useCallback(async (fileName, lineNumber, content) => {
+    if (!fileName || !Number.isFinite(Number(lineNumber)) || Number(lineNumber) < 1) return;
+
     try {
       const user = authStorage.getUser() || {};
       
@@ -493,7 +496,12 @@ export default function EditorPage() {
         }
       );
     } catch (err) {
-      console.error('Error tracking modification:', err);
+      // Blame tracking is non-blocking metadata; avoid spamming console on transient backend issues.
+      const now = Date.now();
+      if (now - lastTrackModificationWarnAtRef.current > 30000) {
+        console.warn('Modification tracking is temporarily unavailable; editing and execution continue normally.');
+        lastTrackModificationWarnAtRef.current = now;
+      }
     }
   }, [projectId]);
 
