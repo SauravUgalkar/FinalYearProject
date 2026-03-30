@@ -333,11 +333,17 @@ export default function EditorPage() {
   const persistProjectFiles = useCallback(async (updatedFiles, options = {}) => {
     const now = Date.now();
     if (persistBackoffUntilRef.current && now < persistBackoffUntilRef.current) {
+      console.warn('[Persist] Backing off due to rate limit');
       return;
     }
 
     const token = authStorage.getToken();
-    if (!token) return;
+    if (!token) {
+      console.warn('[Persist] No token available');
+      return;
+    }
+
+    console.log('[Persist] Saving', updatedFiles.length, 'files to server:', updatedFiles.map(f => ({ name: f.name, lang: f.language })));
 
     try {
       if (options.keepalive) {
@@ -354,16 +360,18 @@ export default function EditorPage() {
         if (!response.ok && response.status === 429) {
           persistBackoffUntilRef.current = Date.now() + 30000;
         }
+        console.log('[Persist] Keepalive save completed, status:', response.status);
         return;
       }
 
-      await axios.put(
+      const response = await axios.put(
         `${API_URL}/projects/${projectId}`,
         { files: updatedFiles },
         {
           headers: authStorage.getAuthHeaders()
         }
       );
+      console.log('[Persist] Files saved successfully, server returned', response.data.files?.length, 'files');
     } catch (err) {
       if (err?.response?.status === 429) {
         persistBackoffUntilRef.current = Date.now() + 30000;
@@ -883,7 +891,7 @@ export default function EditorPage() {
       return;
     }
 
-    // Check for duplicate file names
+    // Check for duplicate file names (allow multiple files with same extension/language)
     if (files.some(f => f.name === normalizedFileName)) {
       alert(`File "${normalizedFileName}" already exists in this project.`);
       return;
@@ -896,8 +904,14 @@ export default function EditorPage() {
       language: getLanguageFromExt(normalizedFileName)
     };
     
-    console.log('Creating file:', newFile);
+    console.log('[FileCreate] Creating new file:', { name: newFile.name, language: newFile.language, id: newFile.id });
+    console.log('[FileCreate] Total files before:', files.length);
+    
+    // Important: spread existing files and add new one
     const updatedFiles = [...files, newFile];
+    console.log('[FileCreate] Total files after:', updatedFiles.length);
+    console.log('[FileCreate] Updated files list:', updatedFiles.map(f => ({ name: f.name, language: f.language })));
+    
     setFiles(updatedFiles);
     setCurrentFile(newFile);
     
@@ -906,6 +920,7 @@ export default function EditorPage() {
     
     // Emit file creation event to collaborators
     if (socket && projectId) {
+      console.log('[FileCreate] Emitting code-change socket event for new file:', newFile.name);
       socket.emit('code-change', {
         roomId: projectId,
         fileId: newFile.id,
@@ -916,7 +931,8 @@ export default function EditorPage() {
       });
     }
     
-    // Save project with new file
+    // Save project with new file - ensure all files are preserved
+    console.log('[FileCreate] Saving project with', updatedFiles.length, 'files');
     saveProject(updatedFiles);
   }, [files, projectId, socket, normalizePath]);
 

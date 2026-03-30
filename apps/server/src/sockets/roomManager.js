@@ -397,25 +397,29 @@ class RoomManager {
 
     // Persist file changes to MongoDB for durability across sessions
     try {
+      const filesToPersist = room.codeState.files.map((f) => ({
+        name: this.sanitizeName(f.name),
+        content: f.content,
+        language: f.language,
+        lastModified: f.lastModifiedAt || new Date(),
+        lastModifiedBy: f.lastModifiedBy || 'system'
+      }));
+      
+      console.log(`[RoomManager] Persisting ${filesToPersist.length} files for room ${roomId}:`, filesToPersist.map(f => f.name).join(', '));
+      
       await Project.findByIdAndUpdate(
         roomId,
         {
           $set: {
-            files: room.codeState.files.map((f) => ({
-              name: this.sanitizeName(f.name),
-              content: f.content,
-              language: f.language,
-              lastModified: f.lastModifiedAt || new Date(),
-              lastModifiedBy: f.lastModifiedBy || 'system'
-            })),
+            files: filesToPersist,
             updatedAt: new Date(),
           },
         },
         { new: false, runValidators: true }
       );
-      console.log(`[RoomManager] Persisted ${room.codeState.files.length} files to MongoDB for room ${roomId}`);
+      console.log(`[RoomManager] ✅ Successfully persisted ${filesToPersist.length} files to MongoDB for room ${roomId}`);
     } catch (err) {
-      console.error('[RoomManager] Failed to persist file change to MongoDB:', err.message);
+      console.error('[RoomManager] ❌ Failed to persist file change to MongoDB:', err.message);
     }
 
     // Broadcast all content updates so insert/delete/replace remain in sync.

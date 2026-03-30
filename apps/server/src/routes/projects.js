@@ -167,16 +167,24 @@ router.put('/:projectId', verifyToken, async (req, res) => {
     const updateDoc = { updatedAt: new Date() };
     if (typeof name === 'string') updateDoc.name = name;
     if (typeof description === 'string') updateDoc.description = description;
+    
     const sanitizedFiles = Array.isArray(files)
       ? sanitizeFiles(files, project.language)
       : null;
-    if (sanitizedFiles) updateDoc.files = sanitizedFiles;
+    
+    if (sanitizedFiles) {
+      console.log(`[ProjectsRoute] Received ${files.length} files from client, after sanitization: ${sanitizedFiles.length} files`);
+      console.log(`[ProjectsRoute] Files being saved:`, sanitizedFiles.map(f => f.name).join(', '));
+      updateDoc.files = sanitizedFiles;
+    }
 
     const updatedProject = await Project.findByIdAndUpdate(
       req.params.projectId,
       updateDoc,
       { new: true }
     );
+
+    console.log(`[ProjectsRoute] Project updated with ${updatedProject.files?.length || 0} files`);
 
     if (sanitizedFiles) {
       const roomManager = req.app.get('roomManager');

@@ -249,11 +249,14 @@ export default function FileTree({ files, currentFile, onSelectFile, onCreateFil
 
   const handleCreate = () => {
     if (inputValue.trim()) {
+      console.log('[FileTree] Creating', inputType, ':', inputValue.trim(), 'in folder:', creatingInFolder || 'root');
+      
       if (inputType === 'file') {
         const fullPath = creatingInFolder 
           ? `${creatingInFolder}/${inputValue.trim()}` 
           : inputValue.trim();
         if (typeof onCreateFile === 'function') {
+          console.log('[FileTree] Calling onCreateFile with path:', fullPath);
           onCreateFile(fullPath);
         }
       } else {
@@ -263,15 +266,19 @@ export default function FileTree({ files, currentFile, onSelectFile, onCreateFil
           ? `${creatingInFolder}/${folderName}` 
           : folderName;
         if (typeof onCreateFolder === 'function') {
+          console.log('[FileTree] Calling onCreateFolder with path:', fullPath);
           onCreateFolder(fullPath);
         } else if (typeof onCreateFile === 'function') {
           // Fallback for hosts that don't provide onCreateFolder
           onCreateFile(`${fullPath}/.gitkeep`);
         }
       }
+      
+      // Clear input and reset state AFTER calling handlers
       setInputValue('');
       setShowInput(false);
       setCreatingInFolder('');
+      console.log('[FileTree] Input cleared, ready for next file');
     }
   };
 
@@ -335,23 +342,26 @@ export default function FileTree({ files, currentFile, onSelectFile, onCreateFil
 
       {/* Creation Input */}
       {showInput && (
-        <div className="mx-2 mb-2 mt-1">
+        <div className="mx-2 mb-2 mt-1" key={`input-${creatingInFolder}-${Date.now()}`}>
           <div className="flex items-center gap-2 bg-gray-800 px-2 py-1.5 rounded">
             {inputType === 'file' ? <FileText size={14} className="text-blue-400" /> : <Folder size={14} className="text-blue-400" />}
             <input
               ref={inputRef}
+              key={`file-input-${creatingInFolder}`}
               type="text"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               onBlur={() => {
                 if (!inputValue.trim()) {
+                  console.log('[FileTree] Input blurred, no value, closing');
                   setShowInput(false);
                   setCreatingInFolder('');
                 }
               }}
-              placeholder={inputType === 'file' ? "filename.ext" : "foldername"}
+              placeholder={inputType === 'file' ? "filename.ext (e.g., main.js, utils.py)" : "foldername"}
               className="flex-1 bg-transparent text-white text-sm focus:outline-none"
+              autoFocus
             />
           </div>
           {creatingInFolder && (
