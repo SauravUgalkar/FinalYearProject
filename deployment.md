@@ -109,6 +109,8 @@ Optional but recommended:
 - MAX_CHAT_MESSAGE_CHARS = 2000
 - GEMINI_API_KEY = <optional_if_analytics_ai_used>
 - ERROR_REPORT_WEBHOOK_URL = <optional>
+- WORKER_HEALTHCHECK_URL = https://<worker-url>/health
+- WORKER_KEEPALIVE_INTERVAL_MS = 240000
 
 ### Server Success Criteria
 
@@ -166,6 +168,10 @@ Deployment is correct when logs show:
 1. Redis connected
 2. Worker started and waiting for jobs
 3. No repeated WRONGPASS, ECONNREFUSED, or crash restart loop
+
+If worker is deployed as Web Service (free-plan workaround), also verify:
+
+4. GET https://<worker-url>/health returns 200
 
 ## 7) Render Service #3: Client (Static Site)
 

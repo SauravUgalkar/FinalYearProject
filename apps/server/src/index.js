@@ -223,7 +223,37 @@ queueEvents.on("progress", (jobId, progress) => {
   console.log(`[Queue] Progress event - Job: ${jobId}, Progress: ${progress}`);
 });
 
-queueEvents.on("completed", (job) => {
+const emitToExecutionTargets = async (jobInfo, eventName, payload) => {
+  const targetSocketIds = new Set();
+
+  if (jobInfo?.socketId) {
+    targetSocketIds.add(jobInfo.socketId);
+  }
+
+  if (jobInfo?.userId) {
+    try {
+      const sockets = await io.fetchSockets();
+      sockets.forEach((s) => {
+        const sameUser = String(s.data?.userId || '') === String(jobInfo.userId || '');
+        const inRoom = !jobInfo?.roomId || s.rooms.has(String(jobInfo.roomId));
+        if (sameUser && inRoom) {
+          targetSocketIds.add(s.id);
+        }
+      });
+    } catch (err) {
+      console.error('[Queue] Failed to fetch sockets for execution delivery:', err.message);
+    }
+  }
+
+  if (targetSocketIds.size === 0 && jobInfo?.socketId) {
+    targetSocketIds.add(jobInfo.socketId);
+  }
+
+  targetSocketIds.forEach((id) => io.to(id).emit(eventName, payload));
+  return targetSocketIds.size;
+};
+
+queueEvents.on("completed", async (job) => {
   console.log(`[Queue] Completed event received`, job);
   console.log(`[Queue] Job object keys:`, Object.keys(job));
   
@@ -252,35 +282,38 @@ queueEvents.on("completed", (job) => {
       const isRuntimeError = workerStatus === 'error' || workerStatus === 'timeout';
 
       if (isCompileError) {
-        console.log(`[Queue] Compile error, emitting execution-error to socket ${socketId}`);
-        io.to(socketId).emit('execution-error', {
+        const payload = {
           jobId: jobId,
           compileError: returnvalue?.compileError || 'Compilation failed',
           runtimeError: null,
           output: ''
-        });
+        };
+        const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-error', payload);
+        console.log(`[Queue] Compile error delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
         persistAnalyticsForJob(jobInfo, 'error', 0);
         saveSubmission(jobInfo, returnvalue, 'error');
       } else if (isRuntimeError) {
-        console.log(`[Queue] Runtime error, emitting execution-error to socket ${socketId}`);
-        io.to(socketId).emit('execution-error', {
+        const payload = {
           jobId: jobId,
           compileError: null,
           runtimeError: returnvalue?.runtimeError || returnvalue?.error || 'Execution failed',
           output: returnvalue?.output || ''
-        });
+        };
+        const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-error', payload);
+        console.log(`[Queue] Runtime error delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
         persistAnalyticsForJob(jobInfo, 'error', 0);
         saveSubmission(jobInfo, returnvalue, 'error');
       } else {
-        console.log(`[Queue] Emitting execution-result to socket ${socketId}`);
-        io.to(socketId).emit('execution-result', {
+        const payload = {
           jobId: jobId,
           output: returnvalue?.output || '',
           compileError: null,
           runtimeError: returnvalue?.runtimeError || null,
           executionTime: returnvalue?.executionTime || 0,
           status: 'success'
-        });
+        };
+        const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-result', payload);
+        console.log(`[Queue] Execution result delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
         persistAnalyticsForJob(jobInfo, 'success', returnvalue?.executionTime || 0);
         saveSubmission(jobInfo, returnvalue, 'success');
       }
@@ -302,7 +335,7 @@ queueEvents.on("completed", (job) => {
   }
 });
 
-queueEvents.on("failed", (job) => {
+queueEvents.on("failed", async (job) => {
   console.error(`[Queue] Failed event:`, job);
   const jobId = job?.jobId || job?.id;
   const failedReason = job?.failedReason || job?.error;
@@ -311,13 +344,14 @@ queueEvents.on("failed", (job) => {
     const jobInfo = jobRoomMap.get(jobId);
     if (jobInfo) {
       const { socketId, roomId } = jobInfo;
-      console.log(`[Queue] Emitting execution-error to socket ${socketId}`);
-      io.to(socketId).emit('execution-error', {
+      const payload = {
         jobId: jobId,
         compileError: null,
         runtimeError: failedReason || 'Job failed',
         output: ''
-      });
+      };
+      const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-error', payload);
+      console.log(`[Queue] Failed job error delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
 
       // Broadcast to the room for visibility
       io.to(roomId).emit('execution-activity', {

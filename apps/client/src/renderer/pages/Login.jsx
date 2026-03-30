@@ -32,7 +32,7 @@ export default function Login() {
     try {
       const response = await axios.post(`${API_URL}/auth/login`, formData, {
         headers: { 'Content-Type': 'application/json' },
-        timeout: 10000
+        timeout: 30000
       });
       console.log('Login success:', response.data);
       
@@ -45,7 +45,9 @@ export default function Login() {
       navigate('/dashboard', { replace: true });
     } catch (err) {
       console.error('Login error:', err);
-      const errorMsg = err.response?.data?.error || err.message || 'Login failed';
+      const errorMsg = err.code === 'ECONNABORTED'
+        ? 'Login request timed out. Server may be waking up, please try again.'
+        : (err.response?.data?.error || err.message || 'Login failed');
       setError(errorMsg);
     } finally {
       setLoading(false);

@@ -1,5 +1,6 @@
 const Project = require('../models/Project');
 const { isProjectMember, loadProjectMemberContext } = require('../middleware/checkProjectMember');
+const axios = require('axios');
 
 const ROOM_LIMITS = {
   MAX_PROJECT_FILES: Number(process.env.MAX_PROJECT_FILES || 200),
@@ -16,6 +17,46 @@ class RoomManager {
     this.activeRooms = new Map();
     this.userRoomMap = new Map();
     this.codeChangeThrottle = new Map();
+    this.workerHealthcheckUrl = process.env.WORKER_HEALTHCHECK_URL || '';
+    this.workerKeepAliveIntervalMs = Number(process.env.WORKER_KEEPALIVE_INTERVAL_MS || 240000);
+    this.workerKeepAliveTimer = null;
+
+    if (this.workerHealthcheckUrl) {
+      this.startWorkerKeepAlive();
+    }
+  }
+
+  async warmWorkerForExecution() {
+    if (!this.workerHealthcheckUrl) return;
+
+    try {
+      const response = await axios.get(this.workerHealthcheckUrl, {
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+
+      const redisConnected = response?.data?.redisConnected;
+      console.log(`[RoomManager] Worker warmup status: HTTP ${response.status}, redisConnected=${redisConnected}`);
+    } catch (error) {
+      console.warn('[RoomManager] Worker warmup request failed:', error.message);
+    }
+  }
+
+  startWorkerKeepAlive() {
+    if (!this.workerHealthcheckUrl || this.workerKeepAliveIntervalMs <= 0) return;
+    if (this.workerKeepAliveTimer) return;
+
+    // Keep worker service warm on free web-service plans.
+    this.workerKeepAliveTimer = setInterval(() => {
+      this.warmWorkerForExecution();
+    }, this.workerKeepAliveIntervalMs);
+
+    if (typeof this.workerKeepAliveTimer.unref === 'function') {
+      this.workerKeepAliveTimer.unref();
+    }
+
+    // Trigger an immediate warm-up once during startup.
+    this.warmWorkerForExecution();
   }
 
   sanitizeName(rawName) {
@@ -585,6 +626,9 @@ class RoomManager {
 
     try {
       console.log(`[RoomManager] Code execution approved for ${user.userName} (role: ${user.role})`);
+
+      // Wake worker service before queueing on platforms where worker can sleep.
+      await this.warmWorkerForExecution();
       
       // Add job to execution queue
       const job = await this.executionQueue.add('execute', {

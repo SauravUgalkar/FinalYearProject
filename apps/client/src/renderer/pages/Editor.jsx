@@ -85,6 +85,7 @@ export default function EditorPage() {
   const apiFilesHydratedRef = useRef(false);
   const lastUnreadEventKeyRef = useRef('');
   const executionTimeoutRef = useRef(null);
+  const EXECUTION_RESPONSE_TIMEOUT_MS = Number(process.env.REACT_APP_EXECUTION_RESPONSE_TIMEOUT_MS || 120000);
   const persistBackoffUntilRef = useRef(0);
   const lastPersistWarnAtRef = useRef(0);
 
@@ -1320,8 +1321,8 @@ export default function EditorPage() {
     executionTimeoutRef.current = setTimeout(() => {
       setIsExecuting(false);
       setWaitingForInput(false);
-      setRuntimeError('Execution timeout: no response received. Please run again.');
-    }, 45000);
+      setRuntimeError('Execution timeout: no response received. Worker or server may be reconnecting. Please run again.');
+    }, EXECUTION_RESPONSE_TIMEOUT_MS);
 
     console.log('Executing code:', {
       language: currentFile.language,
@@ -1345,7 +1346,7 @@ export default function EditorPage() {
           language: file.language || getLanguageFromExt(file.name),
         }))
     });
-  }, [currentFile, socket, projectId, executionInput, userRole, files]);
+  }, [currentFile, socket, projectId, executionInput, userRole, files, EXECUTION_RESPONSE_TIMEOUT_MS]);
 
   // Listen for execution results
   React.useEffect(() => {
