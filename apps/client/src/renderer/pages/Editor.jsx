@@ -79,10 +79,12 @@ export default function EditorPage() {
   const remoteCursorsRef = useRef(new Map()); // Map of socketId -> cursor payload
   const remoteCursorDecorationIdsRef = useRef([]);
   const remoteCursorStyleKeysRef = useRef(new Set());
+  const renderRemoteCursorsRef = useRef(() => {});
   const cursorBroadcastRef = useRef({ lastSentAt: 0, timeoutId: null, pendingPayload: null });
   const fallbackSyncRef = useRef({ timeoutId: null, pendingPayload: null });
   const roomStateHydratedRef = useRef(false); // Avoid first stale room-state wiping API-loaded files
   const apiFilesHydratedRef = useRef(false);
+  const recentCreateRef = useRef({ fileName: '', timestamp: 0 });
   const lastUnreadEventKeyRef = useRef('');
   const executionTimeoutRef = useRef(null);
   const EXECUTION_RESPONSE_TIMEOUT_MS = Number(process.env.REACT_APP_EXECUTION_RESPONSE_TIMEOUT_MS || 120000);
@@ -732,6 +734,10 @@ export default function EditorPage() {
   }, [renderRemoteCursors]);
 
   useEffect(() => {
+    renderRemoteCursorsRef.current = renderRemoteCursors;
+  }, [renderRemoteCursors]);
+
+  useEffect(() => {
     const editor = monacoEditorRef.current;
     if (!editor || !currentFile?.name) return;
 
@@ -813,12 +819,23 @@ export default function EditorPage() {
           }
         }
         if (changed) {
-          renderRemoteCursors();
+          renderRemoteCursorsRef.current();
         }
       };
 
       const handleRoomState = (payload) => {
         const incomingRoomFiles = sanitizeProjectFiles(payload?.codeState?.files || []);
+
+        // Guard against stale room-state shortly after a confirmed file creation.
+        const recentlyCreated = recentCreateRef.current;
+        const withinCreateGuardWindow = Date.now() - Number(recentlyCreated.timestamp || 0) < 8000;
+        if (withinCreateGuardWindow && recentlyCreated.fileName) {
+          const hasRecentFile = incomingRoomFiles.some((f) => normalizePath(f.name) === normalizePath(recentlyCreated.fileName));
+          if (!hasRecentFile && filesRef.current.some((f) => normalizePath(f.name) === normalizePath(recentlyCreated.fileName))) {
+            console.warn('[RoomState] Ignoring stale room-state missing newly created file:', recentlyCreated.fileName);
+            return;
+          }
+        }
 
         // Guard against an early empty room-state replacing freshly loaded API state.
         const isFirstRoomState = !roomStateHydratedRef.current;
@@ -868,7 +885,7 @@ export default function EditorPage() {
         socket.off('join-error');
       };
     }
-  }, [socket, projectId, navigate, renderRemoteCursors, sanitizeProjectFiles, mergeFilesPreservingSavedContent]);
+  }, [socket, projectId, navigate, sanitizeProjectFiles, mergeFilesPreservingSavedContent, normalizePath]);
 
   const saveProject = async (updatedFiles) => {
     try {
@@ -919,16 +936,10 @@ export default function EditorPage() {
     console.log('[FileCreate] Creating new file:', { name: newFile.name, language: newFile.language, id: newFile.id });
     console.log('[FileCreate] Total files before:', files.length);
     
-    // Optimistic local update for immediate UI feedback.
+    // Build candidate files list and persist first; backend response is authoritative.
     const updatedFiles = [...files, newFile];
     console.log('[FileCreate] Total files after:', updatedFiles.length);
     console.log('[FileCreate] Updated files list:', updatedFiles.map(f => ({ name: f.name, language: f.language })));
-    
-    setFiles(updatedFiles);
-    setCurrentFile(newFile);
-    
-    // Initialize Yjs for the new file
-    initializeYjsFile(newFile.name, newFile.content);
     
     // Persist first, then sync UI from backend response to prevent re-fetch wipeout.
     try {
@@ -936,14 +947,16 @@ export default function EditorPage() {
       const saved = await persistProjectFiles(updatedFiles);
       const persistedFiles = sanitizeProjectFiles(saved?.files || []);
       console.log('[FileCreate] FILES FROM API:', persistedFiles.map((f) => f.name));
+      console.log('FILES AFTER CREATE:', persistedFiles.map((f) => f.name));
 
       if (persistedFiles.length > 0) {
         setFiles(persistedFiles);
-        setCurrentFile(
-          persistedFiles.find((f) => f.name === normalizedFileName)
-          || persistedFiles.find((f) => !f.name.endsWith('/'))
-          || null
-        );
+        const createdFile = persistedFiles.find((f) => f.name === normalizedFileName);
+        setCurrentFile(createdFile || persistedFiles.find((f) => !f.name.endsWith('/')) || null);
+        if (createdFile) {
+          initializeYjsFile(createdFile.name, createdFile.content || '');
+          recentCreateRef.current = { fileName: createdFile.name, timestamp: Date.now() };
+        }
       }
 
       // Emit file creation event to collaborators after persistence success.

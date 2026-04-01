@@ -174,6 +174,7 @@ router.put('/:projectId', verifyToken, async (req, res) => {
     
     if (sanitizedFiles) {
       console.log(`[ProjectsRoute] Received ${files.length} files from client, after sanitization: ${sanitizedFiles.length} files`);
+      console.log('FILES BEFORE SAVE:', (project.files || []).map((f) => String(f?.name || '').trim()));
       console.log('[ProjectsRoute] FILES BEFORE SAVE:', (project.files || []).map((f) => String(f?.name || '').trim()));
       console.log('[ProjectsRoute] Files being saved:', sanitizedFiles.map(f => f.name).join(', '));
       updateDoc.files = sanitizedFiles;
@@ -186,6 +187,7 @@ router.put('/:projectId', verifyToken, async (req, res) => {
     );
 
     console.log(`[ProjectsRoute] Project updated with ${updatedProject.files?.length || 0} files`);
+    console.log('FILES AFTER SAVE:', (updatedProject.files || []).map((f) => String(f?.name || '').trim()));
     console.log('[ProjectsRoute] FILES AFTER SAVE:', (updatedProject.files || []).map((f) => String(f?.name || '').trim()));
 
     if (sanitizedFiles) {
