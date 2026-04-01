@@ -362,7 +362,7 @@ export default function EditorPage() {
           persistBackoffUntilRef.current = Date.now() + 30000;
         }
         console.log('[Persist] Keepalive save completed, status:', response.status);
-        return;
+        return null;
       }
 
       const response = await axios.put(
@@ -373,6 +373,8 @@ export default function EditorPage() {
         }
       );
       console.log('[Persist] Files saved successfully, server returned', response.data.files?.length, 'files');
+      console.log('[Persist] FILES FROM API:', response.data.files?.map((f) => f?.name));
+      return response.data;
     } catch (err) {
       if (err?.response?.status === 429) {
         persistBackoffUntilRef.current = Date.now() + 30000;
@@ -870,10 +872,12 @@ export default function EditorPage() {
 
   const saveProject = async (updatedFiles) => {
     try {
-      await persistProjectFiles(updatedFiles);
+      const saved = await persistProjectFiles(updatedFiles);
       console.log('[Save] Project saved to server');
+      return saved;
     } catch (err) {
       console.error('[Save] Error saving project:', err?.response?.status, err?.message);
+      return null;
     }
   };
 
@@ -888,7 +892,7 @@ export default function EditorPage() {
     }
   }, []);
 
-  const handleCreateFile = useCallback((fileName) => {
+  const handleCreateFile = useCallback(async (fileName) => {
     const normalizedFileName = normalizePath(fileName);
     if (!normalizedFileName) {
       alert('File name cannot be empty.');
@@ -915,7 +919,7 @@ export default function EditorPage() {
     console.log('[FileCreate] Creating new file:', { name: newFile.name, language: newFile.language, id: newFile.id });
     console.log('[FileCreate] Total files before:', files.length);
     
-    // Important: spread existing files and add new one
+    // Optimistic local update for immediate UI feedback.
     const updatedFiles = [...files, newFile];
     console.log('[FileCreate] Total files after:', updatedFiles.length);
     console.log('[FileCreate] Updated files list:', updatedFiles.map(f => ({ name: f.name, language: f.language })));
@@ -926,23 +930,44 @@ export default function EditorPage() {
     // Initialize Yjs for the new file
     initializeYjsFile(newFile.name, newFile.content);
     
-    // Emit file creation event to collaborators
-    if (socket && projectId) {
-      console.log('[FileCreate] Emitting code-change socket event for new file:', newFile.name);
-      socket.emit('code-change', {
-        roomId: projectId,
-        fileId: newFile.id,
-        fileName: newFile.name,
-        content: newFile.content,
-        language: newFile.language,
-        isNewFile: true
+    // Persist first, then sync UI from backend response to prevent re-fetch wipeout.
+    try {
+      console.log('[FileCreate] Saving project with', updatedFiles.length, 'files');
+      const saved = await persistProjectFiles(updatedFiles);
+      const persistedFiles = sanitizeProjectFiles(saved?.files || []);
+      console.log('[FileCreate] FILES FROM API:', persistedFiles.map((f) => f.name));
+
+      if (persistedFiles.length > 0) {
+        setFiles(persistedFiles);
+        setCurrentFile(
+          persistedFiles.find((f) => f.name === normalizedFileName)
+          || persistedFiles.find((f) => !f.name.endsWith('/'))
+          || null
+        );
+      }
+
+      // Emit file creation event to collaborators after persistence success.
+      if (socket && projectId) {
+        console.log('[FileCreate] Emitting code-change socket event for new file:', newFile.name);
+        socket.emit('code-change', {
+          roomId: projectId,
+          fileId: newFile.id,
+          fileName: newFile.name,
+          content: newFile.content,
+          language: newFile.language,
+          isNewFile: true
+        });
+      }
+    } catch (err) {
+      console.error('[FileCreate] Failed to persist new file:', err?.response?.status, err?.message);
+      setFiles(files);
+      setCurrentFile((prev) => {
+        if (prev && prev.name !== normalizedFileName) return prev;
+        return files.find((f) => !f.name.endsWith('/')) || null;
       });
+      alert(err?.response?.data?.error || 'Failed to create file on server.');
     }
-    
-    // Save project with new file - ensure all files are preserved
-    console.log('[FileCreate] Saving project with', updatedFiles.length, 'files');
-    saveProject(updatedFiles);
-  }, [files, projectId, socket, normalizePath]);
+  }, [files, projectId, socket, normalizePath, initializeYjsFile, persistProjectFiles, sanitizeProjectFiles]);
 
   const handleSelectFile = useCallback((selectedFile) => {
     if (!selectedFile) return;

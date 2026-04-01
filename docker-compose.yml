@@ -45,7 +45,7 @@ services:
     container_name: collab-code-worker
     restart: always
     environment:
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: redis://redis:6379
       MONGODB_URI: ${MONGODB_URI}
       NODE_ENV: ${NODE_ENV}
     depends_on:
@@ -71,7 +71,7 @@ services:
     environment:
       PORT: ${PORT}
       MONGODB_URI: ${MONGODB_URI}
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET}
       NODE_ENV: ${NODE_ENV}
     depends_on:
