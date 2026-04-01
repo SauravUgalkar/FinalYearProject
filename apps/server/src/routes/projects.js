@@ -164,9 +164,8 @@ router.put('/:projectId', verifyToken, async (req, res) => {
       return res.status(403).json({ error: 'Only project owner or editor collaborators can update project details' });
     }
 
-    const updateDoc = { updatedAt: new Date() };
-    if (typeof name === 'string') updateDoc.name = name;
-    if (typeof description === 'string') updateDoc.description = description;
+    if (typeof name === 'string') project.name = name;
+    if (typeof description === 'string') project.description = description;
     
     const sanitizedFiles = Array.isArray(files)
       ? sanitizeFiles(files, project.language)
@@ -175,20 +174,16 @@ router.put('/:projectId', verifyToken, async (req, res) => {
     if (sanitizedFiles) {
       console.log(`[ProjectsRoute] Received ${files.length} files from client, after sanitization: ${sanitizedFiles.length} files`);
       console.log('FILES BEFORE SAVE:', (project.files || []).map((f) => String(f?.name || '').trim()));
-      console.log('[ProjectsRoute] FILES BEFORE SAVE:', (project.files || []).map((f) => String(f?.name || '').trim()));
       console.log('[ProjectsRoute] Files being saved:', sanitizedFiles.map(f => f.name).join(', '));
-      updateDoc.files = sanitizedFiles;
+      project.files = sanitizedFiles;
     }
 
-    const updatedProject = await Project.findByIdAndUpdate(
-      req.params.projectId,
-      updateDoc,
-      { new: true, runValidators: true }
-    );
+    project.updatedAt = new Date();
+    await project.save();
+    const updatedProject = await Project.findById(req.params.projectId);
 
     console.log(`[ProjectsRoute] Project updated with ${updatedProject.files?.length || 0} files`);
     console.log('FILES AFTER SAVE:', (updatedProject.files || []).map((f) => String(f?.name || '').trim()));
-    console.log('[ProjectsRoute] FILES AFTER SAVE:', (updatedProject.files || []).map((f) => String(f?.name || '').trim()));
 
     if (sanitizedFiles) {
       const roomManager = req.app.get('roomManager');
