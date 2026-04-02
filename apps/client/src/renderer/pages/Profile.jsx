@@ -25,7 +25,6 @@ export default function Profile() {
     // Clear all session data
     authStorage.clearToken();
     authStorage.clearUser();
-    localStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
     // Navigate to login page

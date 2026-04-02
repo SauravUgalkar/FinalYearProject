@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
+const passport = require('passport');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs').promises;
@@ -8,9 +9,73 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const Project = require('../models/Project');
 const User = require('../models/User');
+const {
+  getGithubTokenFromUser,
+  saveGithubTokenForUser,
+} = require('../services/githubTokenService');
 
 const execFileAsync = promisify(execFile);
 const IMPORT_TMP = '/tmp/github-imports';
+
+const buildFrontendCallbackUrl = () => {
+  const explicit = process.env.CLIENT_GITHUB_CALLBACK_URL;
+  if (explicit) return explicit;
+
+  const corsOrigin = (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',')[0].trim();
+  return `${corsOrigin}/github/callback`;
+};
+
+const buildOAuthCallbackUrl = () => {
+  return process.env.GITHUB_REDIRECT_URI || 'http://localhost:5000/api/github/oauth/callback';
+};
+
+const buildOAuthState = (userId) => {
+  return jwt.sign(
+    {
+      userId,
+      purpose: 'github-link',
+    },
+    process.env.JWT_SECRET || 'your_secret_key',
+    { expiresIn: '10m' }
+  );
+};
+
+const buildAuthUrl = (state) => {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  if (!clientId) return '';
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: buildOAuthCallbackUrl(),
+    scope: 'repo,user',
+    state,
+    allow_signup: 'true',
+  });
+
+  return `https://github.com/login/oauth/authorize?${params.toString()}`;
+};
+
+const mapGithubApiError = (error) => {
+  const status = error?.response?.status;
+  if (status === 401) {
+    return { status: 401, payload: { error: 'GitHub token expired. Reconnect GitHub.', code: 'GITHUB_TOKEN_EXPIRED', needsAuth: true } };
+  }
+  if (status === 404) {
+    return { status: 404, payload: { error: 'Repository not found' } };
+  }
+  if (status === 403) {
+    return { status: 403, payload: { error: 'Forbidden by GitHub permissions' } };
+  }
+  return null;
+};
+
+const getUserGithubToken = (user) => {
+  try {
+    return getGithubTokenFromUser(user);
+  } catch {
+    return '';
+  }
+};
 
 const getLanguageFromName = (fileName) => {
   const ext = String(fileName || '').split('.').pop().toLowerCase();
@@ -49,50 +114,51 @@ const verifyToken = (req, res, next) => {
 };
 
 // Get GitHub authorization URL
-router.get('/auth-url', (req, res) => {
-  const clientId = process.env.GITHUB_CLIENT_ID;
-  const redirectUri = process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/github/callback';
-  if (!clientId) {
+router.get('/auth-url', verifyToken, (req, res) => {
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
     return res.status(400).json({ error: 'GitHub OAuth not configured' });
   }
 
-  const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo,user`;
+  const state = buildOAuthState(req.userId);
+  const authUrl = buildAuthUrl(state);
   res.json({ authUrl });
 });
 
-// Exchange code for token
-router.post('/callback', async (req, res) => {
+router.get('/oauth/callback',
+  passport.authenticate('github', { session: false, failureRedirect: `${buildFrontendCallbackUrl()}?linked=0&error=oauth_failed` }),
+  async (req, res) => {
   try {
-    const { code } = req.body;
+    const payload = req.user;
+    const appUserId = payload?.appUserId;
+    const accessToken = payload?.accessToken;
+    const profile = payload?.githubProfile;
 
-    const tokenResponse = await axios.post(
-      'https://github.com/login/oauth/access_token',
-      {
-        client_id: process.env.GITHUB_CLIENT_ID,
-        client_secret: process.env.GITHUB_CLIENT_SECRET,
-        code
-      },
-      { headers: { Accept: 'application/json' } }
-    );
-
-    const { access_token } = tokenResponse.data || {};
-
-    // If caller is authenticated, persist token to their user record
-    try {
-      const authHeader = req.headers.authorization;
-      if (authHeader && access_token) {
-        const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_secret_key');
-        const userId = decoded.userId;
-        await User.findByIdAndUpdate(userId, {
-          $set: { githubAccessToken: access_token, updatedAt: new Date() }
-        });
-      }
-    } catch (persistErr) {
-      console.warn('[GitHub] Could not persist access token to user:', persistErr.message);
+    if (!appUserId || !accessToken) {
+      return res.redirect(`${buildFrontendCallbackUrl()}?linked=0&error=invalid_callback`);
     }
 
-    res.json(tokenResponse.data);
+    await saveGithubTokenForUser({
+      userId: appUserId,
+      accessToken,
+      githubId: profile?.id,
+      githubUsername: profile?.username || profile?.displayName || '',
+    });
+
+    return res.redirect(`${buildFrontendCallbackUrl()}?linked=1`);
+  } catch (error) {
+    return res.redirect(`${buildFrontendCallbackUrl()}?linked=0&error=token_save_failed`);
+  }
+});
+
+router.get('/status', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).lean();
+    const githubToken = getUserGithubToken(user);
+    res.json({
+      linked: Boolean(githubToken),
+      githubUsername: user?.githubUsername || '',
+      githubTokenUpdatedAt: user?.githubTokenUpdatedAt || null,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -114,13 +180,9 @@ router.post('/export/:projectId', verifyToken, async (req, res) => {
 
     // Resolve user's GitHub token server-side
     const user = await User.findById(req.userId).lean();
-    const githubToken = user?.githubAccessToken;
+    const githubToken = getUserGithubToken(user);
     if (!githubToken) {
-      const clientId = process.env.GITHUB_CLIENT_ID;
-      const redirectUri = process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/github/callback';
-      const authUrl = clientId
-        ? `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo,user`
-        : null;
+      const authUrl = buildAuthUrl(buildOAuthState(req.userId));
       return res.status(428).json({
         error: 'GitHub not linked',
         needsAuth: true,
@@ -171,6 +233,8 @@ router.post('/export/:projectId', verifyToken, async (req, res) => {
       repositoryName: repoResponse.data.name
     });
   } catch (error) {
+    const mapped = mapGithubApiError(error);
+    if (mapped) return res.status(mapped.status).json(mapped.payload);
     console.error('Error exporting to GitHub:', error);
     res.status(500).json({ error: error.message });
   }
@@ -179,12 +243,13 @@ router.post('/export/:projectId', verifyToken, async (req, res) => {
 router.get('/repos', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.userId).lean();
-    if (!user?.githubAccessToken) {
+    const githubToken = getUserGithubToken(user);
+    if (!githubToken) {
       return res.status(428).json({ error: 'GitHub not linked', needsAuth: true });
     }
 
     const response = await axios.get('https://api.github.com/user/repos', {
-      headers: { Authorization: `token ${user.githubAccessToken}` },
+      headers: { Authorization: `token ${githubToken}` },
       params: { per_page: 100, sort: 'updated', affiliation: 'owner,collaborator' }
     });
 
@@ -204,9 +269,8 @@ router.get('/repos', verifyToken, async (req, res) => {
 
     res.json({ repos });
   } catch (error) {
-    if (error.response?.status === 401) {
-      return res.status(401).json({ error: 'GitHub token expired. Reconnect GitHub.' });
-    }
+    const mapped = mapGithubApiError(error);
+    if (mapped) return res.status(mapped.status).json(mapped.payload);
     res.status(500).json({ error: error.message });
   }
 });
@@ -221,7 +285,8 @@ router.post('/import', verifyToken, async (req, res) => {
     }
 
     const user = await User.findById(req.userId).lean();
-    if (!user?.githubAccessToken) {
+    const githubToken = getUserGithubToken(user);
+    if (!githubToken) {
       return res.status(428).json({ error: 'GitHub not linked', needsAuth: true });
     }
 
@@ -230,7 +295,7 @@ router.post('/import', verifyToken, async (req, res) => {
       try {
         const url = new URL(cloneUrl.replace(/\.git$/, '') + '.git');
         url.username = 'oauth2';
-        url.password = user.githubAccessToken;
+        url.password = githubToken;
         return url.toString();
       } catch { return cloneUrl; }
     })();

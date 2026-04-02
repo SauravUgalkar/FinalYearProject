@@ -26,6 +26,10 @@ services:
         sync: false
       - key: GITHUB_REDIRECT_URI
         sync: false
+      - key: CLIENT_GITHUB_CALLBACK_URL
+        sync: false
+      - key: GITHUB_TOKEN_ENC_KEY
+        sync: false
 
   - type: worker
     name: collab-code-worker

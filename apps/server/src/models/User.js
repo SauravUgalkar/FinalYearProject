@@ -6,6 +6,12 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   avatar: { type: String },
   githubId: { type: String },
+  githubUsername: { type: String },
+  githubTokenCiphertext: { type: String },
+  githubTokenIv: { type: String },
+  githubTokenTag: { type: String },
+  githubTokenUpdatedAt: { type: Date },
+  // Legacy fallback; migration path unsets this after secure token storage is populated.
   githubAccessToken: { type: String },
   googleId: { type: String },
   codingLanguages: [String],

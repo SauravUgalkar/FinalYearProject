@@ -87,7 +87,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const [branches,      setBranches]      = useState([]);
   const [newBranchName, setNewBranchName] = useState('');
 
-  const [githubLinked, setGithubLinked] = useState(!!localStorage.getItem('github_token'));
+  const [githubLinked, setGithubLinked] = useState(false);
   const [commitHistory, setCommitHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expandedCommits, setExpandedCommits] = useState({});
@@ -144,6 +144,15 @@ export default function GitControl({ projectId, onFilesChanged }) {
     }
   }, [projectId]);
 
+  const fetchGithubStatus = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/github/status`, { headers: headers() });
+      setGithubLinked(Boolean(res?.data?.linked));
+    } catch {
+      setGithubLinked(false);
+    }
+  }, []);
+
   const fetchProjectMembers = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/projects/${projectId}`, { headers: headers() });
@@ -182,6 +191,19 @@ export default function GitControl({ projectId, onFilesChanged }) {
   useEffect(() => { fetchBranches(); },  [fetchBranches]);
   useEffect(() => { fetchCommitHistory(); }, [fetchCommitHistory]);
   useEffect(() => { fetchProjectMembers(); }, [fetchProjectMembers]);
+  useEffect(() => { fetchGithubStatus(); }, [fetchGithubStatus]);
+
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (event?.data?.type === 'GITHUB_CONNECTED') {
+        fetchGithubStatus();
+        showToast('success', 'GitHub connected successfully.');
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [fetchGithubStatus]);
 
   // Keep status fresh so Stage & Commit detects new/edited files quickly.
   useEffect(() => {
@@ -244,10 +266,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
   // ── github connect ────────────────────────────────────────────
   const connectGitHub = async () => {
     try {
-      const appToken = authStorage.getToken();
-      if (appToken) localStorage.setItem('oauth_app_token', appToken);
-
-      const res  = await fetch(`${API}/github/auth-url`);
+      const res  = await fetch(`${API}/github/auth-url`, { headers: headers() });
       const data = await res.json();
       if (!data.authUrl) return showToast('error', data.error || 'GitHub OAuth not configured.');
 
@@ -259,10 +278,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
       const poll = setInterval(() => {
         if (popup && popup.closed) {
           clearInterval(poll);
-          if (localStorage.getItem('github_token')) {
-            setGithubLinked(true);
-            showToast('success', 'GitHub connected successfully.');
-          }
+          fetchGithubStatus();
         }
       }, 500);
     } catch { showToast('error', 'Could not start GitHub login.'); }

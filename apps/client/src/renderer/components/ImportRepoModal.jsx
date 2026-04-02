@@ -50,12 +50,7 @@ export default function ImportRepoModal({ isOpen, onClose, onImported }) {
 
   const connectGitHub = async () => {
     try {
-      const appToken = authStorage.getToken();
-      if (appToken) {
-        localStorage.setItem('oauth_app_token', appToken);
-      }
-
-      const res = await fetch(`${API}/github/auth-url`);
+      const res = await fetch(`${API}/github/auth-url`, { headers: authStorage.getAuthHeaders() });
       const data = await res.json();
       if (!data.authUrl) return setError(data.error || 'GitHub OAuth not configured');
       const w = 600, h = 700;
@@ -63,10 +58,8 @@ export default function ImportRepoModal({ isOpen, onClose, onImported }) {
       const poll = setInterval(() => {
         if (popup.closed) {
           clearInterval(poll);
-          if (localStorage.getItem('github_token')) {
-            setNeedsAuth(false);
-            fetchRepos();
-          }
+          setNeedsAuth(false);
+          fetchRepos();
         }
       }, 500);
     } catch {

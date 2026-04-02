@@ -7,7 +7,8 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "worker": "node src/worker.js",
-    "dev:all": "concurrently \"npm run dev\" \"npm run worker\""
+    "dev:all": "concurrently \"npm run dev\" \"npm run worker\"",
+    "migrate:github-tokens": "node scripts/migrateGithubTokens.js"
   },
   "dependencies": {
     "axios": "^1.5.0",
@@ -25,6 +26,8 @@
     "mongoose": "^7.5.0",
     "morgan": "^1.10.1",
     "multer": "^2.1.1",
+    "passport": "^0.7.0",
+    "passport-github2": "^0.1.12",
     "redis": "^4.6.7",
     "socket.io": "^4.6.1",
     "unzipper": "^0.12.3",

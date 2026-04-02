@@ -46,7 +46,6 @@ export default function Dashboard() {
     // Clear all session data
     authStorage.clearToken();
     authStorage.clearUser();
-    sessionStorage.removeItem('github_token');
     setShowLogoutModal(false);
     
     // Navigate to landing page with a small delay to ensure session storage is cleared

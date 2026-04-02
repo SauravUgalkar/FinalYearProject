@@ -5,14 +5,24 @@ import { authStorage } from '../services/authStorage';
 
 export default function ExportModal({ isOpen, onClose, projectId, files, projectName }) {
   const [exportFormat, setExportFormat] = useState('json');
-  const [githubLinked, setGithubLinked] = useState(!!localStorage.getItem('github_token'));
+  const [githubLinked, setGithubLinked] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
 
   // Check for GitHub token on mount
   useEffect(() => {
-    const token = localStorage.getItem('github_token');
-    setGithubLinked(!!token);
+    const fetchGithubStatus = async () => {
+      if (!isOpen) return;
+      try {
+        const res = await fetch(`${API_URL}/github/status`, { headers: authStorage.getAuthHeaders() });
+        const data = await res.json();
+        setGithubLinked(Boolean(data?.linked));
+      } catch {
+        setGithubLinked(false);
+      }
+    };
+
+    fetchGithubStatus();
   }, [isOpen]);
 
   const handleExportJSON = () => {
@@ -126,8 +136,6 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
       }
 
       const data = await response.json();
-      // Mark as linked client-side as well
-      localStorage.setItem('github_token', 'linked');
       alert(`✅ Exported to GitHub: ${data.repositoryUrl}`);
       if (data.repositoryUrl) {
         window.open(data.repositoryUrl, '_blank');
@@ -143,13 +151,8 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
 
   const startGithubLogin = async () => {
     try {
-      const appToken = authStorage.getToken();
-      if (appToken) {
-        localStorage.setItem('oauth_app_token', appToken);
-      }
-
       setAuthLoading(true);
-      const res = await fetch(`${API_URL}/github/auth-url`);
+      const res = await fetch(`${API_URL}/github/auth-url`, { headers: authStorage.getAuthHeaders() });
       const data = await res.json();
       if (data.authUrl) {
         // Open GitHub OAuth in a popup window
@@ -168,12 +171,15 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
           if (popup.closed) {
             clearInterval(pollTimer);
             setAuthLoading(false);
-            // Check if token was saved
-            const token = localStorage.getItem('github_token');
-            if (token) {
-              setGithubLinked(true);
-              alert('GitHub connected successfully!');
-            }
+            fetch(`${API_URL}/github/status`, { headers: authStorage.getAuthHeaders() })
+              .then((r) => r.json())
+              .then((status) => {
+                if (status?.linked) {
+                  setGithubLinked(true);
+                  alert('GitHub connected successfully!');
+                }
+              })
+              .catch(() => {});
           }
         }, 500);
       } else {
@@ -190,11 +196,6 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
   // Start GitHub OAuth with provided authUrl and attach Authorization header for token persistence
   const startGithubLoginWithAuth = async (authUrl) => {
     return new Promise((resolve) => {
-      const appToken = authStorage.getToken();
-      if (appToken) {
-        localStorage.setItem('oauth_app_token', appToken);
-      }
-
       const width = 600;
       const height = 700;
       const left = window.screen.width / 2 - width / 2;
@@ -208,13 +209,17 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
       const pollTimer = setInterval(() => {
         if (popup.closed) {
           clearInterval(pollTimer);
-          const token = localStorage.getItem('github_token');
-          if (token) {
-            setGithubLinked(true);
-            resolve(true);
-          } else {
-            resolve(false);
-          }
+          fetch(`${API_URL}/github/status`, { headers: authStorage.getAuthHeaders() })
+            .then((r) => r.json())
+            .then((status) => {
+              if (status?.linked) {
+                setGithubLinked(true);
+                resolve(true);
+              } else {
+                resolve(false);
+              }
+            })
+            .catch(() => resolve(false));
         }
       }, 500);
     });

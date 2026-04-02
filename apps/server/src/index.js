@@ -15,6 +15,8 @@ const Project = require("./models/Project");
 const Submission = require("./models/Submission");
 const logger = require('./utils/logger');
 const { reportError } = require('./utils/errorReporter');
+const passport = require('passport');
+const { configurePassport } = require('./config/passport');
 
 const ANALYTICS_LIMITS = {
   MAX_ANALYTICS_ENTRIES: Number(process.env.MAX_ANALYTICS_ENTRIES || 200),
@@ -134,6 +136,8 @@ app.options("*", cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+configurePassport();
+app.use(passport.initialize());
 
 // -----------------------------------------------------------------------------
 // REDIS (IOREDIS) + BULLMQ

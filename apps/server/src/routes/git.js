@@ -7,6 +7,7 @@ const path = require('path');
 const Project = require('../models/Project');
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const { getGithubTokenFromUser } = require('../services/githubTokenService');
 
 const execFileAsync = promisify(execFile);
 const WORKSPACE_ROOT = '/tmp/workspaces';
@@ -201,6 +202,29 @@ const ensureGitInit = async (workspacePath, userEmail, userName) => {
   await runGit(workspacePath, ['init']);
   await runGit(workspacePath, ['config', 'user.email', userEmail || 'collab@code.io']);
   await runGit(workspacePath, ['config', 'user.name', userName || 'CollabCode']);
+};
+
+const getUserGithubToken = (user) => {
+  try {
+    return getGithubTokenFromUser(user);
+  } catch {
+    return '';
+  }
+};
+
+const classifyGitRemoteError = (stderr = '') => {
+  const msg = String(stderr || '').toLowerCase();
+  if (!msg) return null;
+  if (msg.includes('authentication failed') || msg.includes('invalid username or password') || msg.includes('could not read username')) {
+    return { status: 401, body: { error: 'GitHub token expired. Reconnect GitHub.', code: 'GITHUB_TOKEN_EXPIRED', needsAuth: true } };
+  }
+  if (msg.includes('repository not found')) {
+    return { status: 404, body: { error: 'Repository not found on GitHub.' } };
+  }
+  if (msg.includes('permission to') && msg.includes('denied')) {
+    return { status: 403, body: { error: 'No permission to access this GitHub repository.' } };
+  }
+  return null;
 };
 
 // Middleware to verify JWT
@@ -623,7 +647,8 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
     if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can push' });
 
     const user = await User.findById(req.userId).lean();
-    if (!user?.githubAccessToken) {
+    const githubToken = getUserGithubToken(user);
+    if (!githubToken) {
       return res.status(428).json({ error: 'GitHub not linked. Connect GitHub first.', needsAuth: true });
     }
 
@@ -637,7 +662,7 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
     await ensureGitInit(workspacePath, user.email, user.name);
     await syncFilesToDisk(workspacePath, project.files || []);
 
-    await setOriginWithAuth(workspacePath, remoteUrl, user.githubAccessToken);
+    await setOriginWithAuth(workspacePath, remoteUrl, githubToken);
     await runGit(workspacePath, ['fetch', 'origin']);
 
     await runGit(workspacePath, ['add', '.']);
@@ -652,6 +677,8 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
       pushResult = await runGit(workspacePath, ['push', '-u', 'origin', branch]);
     }
     if (!pushResult.success && pushResult.stderr) {
+      const classified = classifyGitRemoteError(pushResult.stderr);
+      if (classified) return res.status(classified.status).json(classified.body);
       return res.status(500).json({ error: pushResult.stderr });
     }
 
@@ -695,7 +722,8 @@ router.post('/:projectId/pull', verifyToken, async (req, res) => {
     if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can pull' });
 
     const user = await User.findById(req.userId).lean();
-    if (!user?.githubAccessToken) {
+    const githubToken = getUserGithubToken(user);
+    if (!githubToken) {
       return res.status(428).json({ error: 'GitHub not linked. Connect GitHub first.', needsAuth: true });
     }
 
@@ -709,7 +737,7 @@ router.post('/:projectId/pull', verifyToken, async (req, res) => {
     await runGit(workspacePath, ['add', '.']);
     await runGit(workspacePath, ['commit', '-m', 'Local snapshot before pull', '--allow-empty']);
 
-    await setOriginWithAuth(workspacePath, remoteUrl, user.githubAccessToken);
+    await setOriginWithAuth(workspacePath, remoteUrl, githubToken);
 
     await runGit(workspacePath, ['fetch', 'origin']);
     const branch = project.gitStatus?.branch || await resolveRemoteDefaultBranch(workspacePath);
@@ -720,6 +748,8 @@ router.post('/:projectId/pull', verifyToken, async (req, res) => {
     const pullResult = await runGit(workspacePath, ['pull', 'origin', branch, '--no-rebase']);
 
     if (!pullResult.success && !pullResult.stdout.includes('Already up to date')) {
+      const classified = classifyGitRemoteError(pullResult.stderr);
+      if (classified) return res.status(classified.status).json(classified.body);
       return res.status(500).json({ error: pullResult.stderr || 'Pull failed' });
     }
 
@@ -808,8 +838,9 @@ router.post('/:projectId/branch', verifyToken, async (req, res) => {
       return res.status(400).json({ error: result.stderr });
     }
 
-    if (project.githubUrl && user?.githubAccessToken) {
-      await setOriginWithAuth(workspacePath, project.githubUrl, user.githubAccessToken);
+    const githubToken = getUserGithubToken(user);
+    if (project.githubUrl && githubToken) {
+      await setOriginWithAuth(workspacePath, project.githubUrl, githubToken);
       await runGit(workspacePath, ['push', '-u', 'origin', safeName]);
     }
 

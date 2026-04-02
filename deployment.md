@@ -90,7 +90,9 @@ GitHub integration (required only if GitHub features are used):
 
 - GITHUB_CLIENT_ID = <github_oauth_client_id>
 - GITHUB_CLIENT_SECRET = <github_oauth_client_secret>
-- GITHUB_REDIRECT_URI = https://<your-client-site>.onrender.com/github/callback
+- GITHUB_REDIRECT_URI = https://<your-server-service>.onrender.com/api/github/oauth/callback
+- CLIENT_GITHUB_CALLBACK_URL = https://<your-client-site>.onrender.com/github/callback
+- GITHUB_TOKEN_ENC_KEY = <32_byte_base64_key>
 
 Optional but recommended:
 
@@ -223,12 +225,82 @@ Deployment is correct when:
 After client deploys and has final URL:
 
 1. Update server CORS_ORIGIN to exact client URL
-2. Update GITHUB_REDIRECT_URI to https://<client-url>/github/callback
+2. Update GITHUB_REDIRECT_URI to https://<server-url>/api/github/oauth/callback
+3. Update CLIENT_GITHUB_CALLBACK_URL to https://<client-url>/github/callback
 3. Trigger server redeploy
 
 If you use both custom domain and default Render domain, include both in CORS_ORIGIN separated by commas:
 
 - CORS_ORIGIN = https://client.example.com,https://collab-code-client.onrender.com
+
+## 11) Exact Env Values for Render and Netlify
+
+### Render: Server Service Environment
+
+Add these in Render Dashboard -> your server service -> Environment.
+
+Required for GitHub OAuth:
+
+- GITHUB_CLIENT_ID
+- GITHUB_CLIENT_SECRET
+- GITHUB_REDIRECT_URI
+- CLIENT_GITHUB_CALLBACK_URL
+- GITHUB_TOKEN_ENC_KEY
+
+Where to get each value:
+
+1. GITHUB_CLIENT_ID
+	- Go to GitHub -> Settings -> Developer settings -> OAuth Apps -> your app.
+	- Copy Client ID.
+
+2. GITHUB_CLIENT_SECRET
+	- Same OAuth App page.
+	- Click Generate a new client secret.
+	- Copy immediately and save in Render.
+
+3. GITHUB_REDIRECT_URI
+	- Use your server URL callback endpoint:
+	- https://<your-server>.onrender.com/api/github/oauth/callback
+	- Must exactly match the callback URL configured in the GitHub OAuth App.
+
+4. CLIENT_GITHUB_CALLBACK_URL
+	- Use your frontend callback route:
+	- https://<your-client>.onrender.com/github/callback
+	- This is where server redirects browser after linking.
+
+5. GITHUB_TOKEN_ENC_KEY
+	- Generate locally with:
+	- openssl rand -base64 32
+	- Paste the generated value into Render env var.
+
+Also required base server env vars:
+
+- NODE_ENV, PORT, MONGODB_URI, REDIS_URL, JWT_SECRET, CORS_ORIGIN
+
+### Netlify: Client Site Environment
+
+If client is hosted on Netlify, set these in Netlify:
+
+- Site settings -> Environment variables
+- Add REACT_APP_API_URL = https://<your-render-server>.onrender.com
+
+Do not add /api at the end.
+
+If using Netlify for client, set this on Render server:
+
+- CLIENT_GITHUB_CALLBACK_URL = https://<your-netlify-site>.netlify.app/github/callback
+
+And set this callback in GitHub OAuth App:
+
+- Authorization callback URL = https://<your-render-server>.onrender.com/api/github/oauth/callback
+
+### Run One-Time Token Migration
+
+If old users already have githubAccessToken saved in plain format, run once:
+
+1. Open shell in server environment.
+2. Run npm run migrate:github-tokens in apps/server.
+3. Confirm log shows migrated count and failed count 0.
 
 ## 9) End-to-End Verification Checklist
 

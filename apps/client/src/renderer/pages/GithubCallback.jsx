@@ -1,62 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API_URL } from '../config/runtime';
-import { authStorage } from '../services/authStorage';
 
 export default function GithubCallback() {
   const navigate = useNavigate();
-  const [status, setStatus] = useState('Completing GitHub sign-in...');
+  const [status, setStatus] = useState('Completing GitHub authorization...');
 
   useEffect(() => {
-    const run = async () => {
-      const params = new URLSearchParams(window.location.search);
-      const code = params.get('code');
-      if (!code) {
-        setStatus('Missing authorization code from GitHub.');
-        return;
+    const params = new URLSearchParams(window.location.search);
+    const linked = params.get('linked') === '1';
+    const error = params.get('error');
+
+    if (linked) {
+      setStatus('GitHub connected successfully.');
+      if (window.opener) {
+        window.opener.postMessage({ type: 'GITHUB_CONNECTED' }, '*');
+        setTimeout(() => window.close(), 600);
+      } else {
+        setTimeout(() => navigate('/dashboard'), 1200);
       }
+      return;
+    }
 
-      try {
-        // Include Authorization when available so server can persist token to user
-        const authToken = authStorage.getToken() || localStorage.getItem('oauth_app_token');
-        const res = await fetch(`${API_URL}/github/callback`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-          },
-          body: JSON.stringify({ code })
-        });
-
-        const data = await res.json();
-        if (!res.ok || !data.access_token) {
-          setStatus(data.error || 'Failed to exchange code for token');
-          return;
-        }
-
-        // Save token for export flows
-        // Mark as linked
-        localStorage.setItem('github_token', 'linked');
-        localStorage.removeItem('oauth_app_token');
-        setStatus('GitHub connected! You can close this window.');
-        
-        // If this is a popup, close it after 2 seconds
-        if (window.opener) {
-          setTimeout(() => {
-            window.opener.postMessage({ type: 'GITHUB_TOKEN_SAVED', token: data.access_token }, '*');
-            window.close();
-          }, 2000);
-        } else {
-          // If not a popup, redirect to dashboard
-          setTimeout(() => navigate('/dashboard'), 1500);
-        }
-      } catch (err) {
-        console.error('GitHub callback error:', err);
-        setStatus('GitHub sign-in failed');
-      }
-    };
-
-    run();
+    setStatus(error ? `GitHub sign-in failed: ${error}` : 'GitHub sign-in failed.');
   }, [navigate]);
 
   return (
