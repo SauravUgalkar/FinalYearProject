@@ -53,11 +53,14 @@ const sanitizeReturnTo = (raw) => {
   return fallback;
 };
 
-const buildClientReturnUrl = ({ returnTo, linked, error }) => {
+const buildClientReturnUrl = ({ returnTo, linked, error, username }) => {
   const origin = getClientOrigin();
   const safeReturnTo = sanitizeReturnTo(returnTo);
   const url = new URL(`${origin}${safeReturnTo}`);
   url.searchParams.set('githubLinked', linked ? '1' : '0');
+  if (username) {
+    url.searchParams.set('githubUsername', username);
+  }
   if (error) {
     url.searchParams.set('githubError', error);
   } else {
@@ -209,7 +212,31 @@ router.get('/oauth/callback', (req, res, next) => {
         githubUsername: profile?.username || profile?.displayName || '',
       });
 
-      return res.redirect(buildClientReturnUrl({ returnTo: resolvedReturnTo, linked: true }));
+      // Resolve canonical profile details from GitHub API using the access token.
+      let githubUsername = profile?.username || profile?.displayName || '';
+      let githubAvatarUrl = '';
+      try {
+        const githubUserRes = await axios.get('https://api.github.com/user', {
+          headers: {
+            Authorization: `token ${accessToken}`,
+            Accept: 'application/vnd.github+json',
+          },
+        });
+        githubUsername = githubUserRes.data?.login || githubUsername;
+        githubAvatarUrl = githubUserRes.data?.avatar_url || '';
+      } catch {
+        // Keep OAuth flow successful even if profile enrichment fails.
+      }
+
+      await User.findByIdAndUpdate(appUserId, {
+        $set: {
+          githubUsername: githubUsername || undefined,
+          githubAvatarUrl: githubAvatarUrl || undefined,
+          updatedAt: new Date(),
+        },
+      });
+
+      return res.redirect(buildClientReturnUrl({ returnTo: resolvedReturnTo, linked: true, username: githubUsername }));
     } catch {
       return res.redirect(buildClientReturnUrl({ returnTo, linked: false, error: 'token_save_failed' }));
     }
@@ -223,6 +250,7 @@ router.get('/status', verifyToken, async (req, res) => {
     res.json({
       linked: Boolean(githubToken),
       githubUsername: user?.githubUsername || '',
+      githubAvatarUrl: user?.githubAvatarUrl || '',
       githubTokenUpdatedAt: user?.githubTokenUpdatedAt || null,
     });
   } catch (error) {
@@ -241,6 +269,7 @@ router.post('/disconnect', verifyToken, async (req, res) => {
         githubTokenUpdatedAt: 1,
         githubId: 1,
         githubUsername: 1,
+        githubAvatarUrl: 1,
       },
       $set: { updatedAt: new Date() },
     });

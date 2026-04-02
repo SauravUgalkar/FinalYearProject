@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema({
   avatar: { type: String },
   githubId: { type: String },
   githubUsername: { type: String },
+  githubAvatarUrl: { type: String },
   githubTokenCiphertext: { type: String },
   githubTokenIv: { type: String },
   githubTokenTag: { type: String },

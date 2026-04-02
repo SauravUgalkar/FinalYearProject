@@ -88,6 +88,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const [newBranchName, setNewBranchName] = useState('');
 
   const [githubLinked, setGithubLinked] = useState(false);
+  const [githubUsername, setGithubUsername] = useState('');
   const [commitHistory, setCommitHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expandedCommits, setExpandedCommits] = useState({});
@@ -148,8 +149,10 @@ export default function GitControl({ projectId, onFilesChanged }) {
     try {
       const res = await axios.get(`${API}/github/status`, { headers: headers() });
       setGithubLinked(Boolean(res?.data?.linked));
+      setGithubUsername(res?.data?.githubUsername || '');
     } catch {
       setGithubLinked(false);
+      setGithubUsername('');
     }
   }, []);
 
@@ -197,6 +200,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
     const params = new URLSearchParams(window.location.search);
     const linked = params.get('githubLinked');
     const error = params.get('githubError');
+    const username = params.get('githubUsername');
 
     const githubErrorMessage = (code) => {
       if (!code) return 'GitHub authentication failed.';
@@ -207,15 +211,16 @@ export default function GitControl({ projectId, onFilesChanged }) {
     };
 
     if (linked === '1') {
-      showToast('success', 'GitHub connected successfully.');
+      showToast('success', username ? `Connected as ${username} ✅` : 'GitHub connected successfully ✅');
       fetchGithubStatus();
     } else if (linked === '0') {
-      showToast('error', `${githubErrorMessage(error)} ❌`);
+      showToast('error', 'GitHub login failed. Please try again. ❌');
     }
 
     if (params.has('githubLinked') || params.has('githubError')) {
       params.delete('githubLinked');
       params.delete('githubError');
+      params.delete('githubUsername');
       const clean = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', clean);
     }
@@ -295,9 +300,20 @@ export default function GitControl({ projectId, onFilesChanged }) {
     try {
       await axios.post(`${API}/github/disconnect`, {}, { headers: headers() });
       setGithubLinked(false);
+      setGithubUsername('');
       showToast('success', 'GitHub account disconnected.');
     } catch (err) {
       showToast('error', err.response?.data?.error || 'Failed to disconnect GitHub account.');
+    }
+  };
+
+  const switchGithubAccount = async () => {
+    try {
+      // Unlink account in app first, then send user to GitHub logout to switch browser account.
+      await axios.post(`${API}/github/disconnect`, {}, { headers: headers() });
+      window.location.assign('https://github.com/logout');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Failed to switch GitHub account.');
     }
   };
 
@@ -494,6 +510,19 @@ export default function GitControl({ projectId, onFilesChanged }) {
                   : <><Link2 size={15} /> Connect GitHub Account</>
                 }
               </button>
+
+              {githubLinked && (
+                <button
+                  onClick={switchGithubAccount}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 text-xs transition"
+                >
+                  <LogOut size={14} /> Switch GitHub Account
+                </button>
+              )}
+
+              {githubLinked && githubUsername && (
+                <p className="text-[11px] text-green-300 text-center">Connected as {githubUsername}</p>
+              )}
 
               {/* Remote URL */}
               <div className="space-y-1.5">
