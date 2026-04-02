@@ -22,6 +22,7 @@ const ANALYTICS_LIMITS = {
   MAX_ANALYTICS_ENTRIES: Number(process.env.MAX_ANALYTICS_ENTRIES || 200),
   MAX_EXECUTION_TIMES: Number(process.env.MAX_EXECUTION_TIMES || 200),
 };
+const MAX_ANALYTICS_EVENT_OUTPUT_CHARS = Number(process.env.MAX_ANALYTICS_EVENT_OUTPUT_CHARS || 8000);
 
 // -----------------------------------------------------------------------------
 // ENV VALIDATION (FAIL FAST)
@@ -167,6 +168,34 @@ const queueEvents = new QueueEvents("code-execution", {
 // Store roomId mapping for jobs
 const jobRoomMap = new Map();
 
+const trimOutputPreview = (value) => {
+  const output = String(value || '');
+  if (output.length <= MAX_ANALYTICS_EVENT_OUTPUT_CHARS) {
+    return output;
+  }
+  return `${output.slice(0, MAX_ANALYTICS_EVENT_OUTPUT_CHARS)}\n[truncated]`;
+};
+
+const buildExecutionEventPayload = (submission, workerResult) => {
+  const output = submission?.output || submission?.executionOutput || workerResult?.output || '';
+  const error = submission?.error || submission?.executionError || workerResult?.runtimeError || workerResult?.compileError || workerResult?.error || '';
+
+  return {
+    id: submission?._id,
+    executionId: submission?.executionId || null,
+    projectId: submission?.projectId,
+    userId: submission?.userId,
+    username: submission?.username || 'Unknown',
+    language: submission?.language || 'javascript',
+    status: submission?.status || 'error',
+    executionTime: Number(submission?.executionTime || workerResult?.executionTime || 0),
+    output: trimOutputPreview(output),
+    error: trimOutputPreview(error),
+    logs: trimOutputPreview(submission?.logs || ''),
+    createdAt: submission?.createdAt || new Date(),
+  };
+};
+
 // Persist execution analytics per user for the project (room)
 const persistAnalyticsForJob = async (jobInfo, status, executionTime = 0) => {
   if (!jobInfo?.roomId || !jobInfo?.userId) return;
@@ -295,7 +324,10 @@ queueEvents.on("completed", async (job) => {
         const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-error', payload);
         console.log(`[Queue] Compile error delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
         persistAnalyticsForJob(jobInfo, 'error', 0);
-        saveSubmission(jobInfo, returnvalue, 'error');
+        const submission = await saveSubmission(jobInfo, returnvalue, 'error');
+        if (submission) {
+          io.to(roomId).emit('execution-record-created', buildExecutionEventPayload(submission, returnvalue));
+        }
       } else if (isRuntimeError) {
         const payload = {
           jobId: jobId,
@@ -306,7 +338,10 @@ queueEvents.on("completed", async (job) => {
         const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-error', payload);
         console.log(`[Queue] Runtime error delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
         persistAnalyticsForJob(jobInfo, 'error', 0);
-        saveSubmission(jobInfo, returnvalue, 'error');
+        const submission = await saveSubmission(jobInfo, returnvalue, 'error');
+        if (submission) {
+          io.to(roomId).emit('execution-record-created', buildExecutionEventPayload(submission, returnvalue));
+        }
       } else {
         const payload = {
           jobId: jobId,
@@ -319,7 +354,10 @@ queueEvents.on("completed", async (job) => {
         const deliveredCount = await emitToExecutionTargets(jobInfo, 'execution-result', payload);
         console.log(`[Queue] Execution result delivered to ${deliveredCount} socket(s) for user ${jobInfo.userName}`);
         persistAnalyticsForJob(jobInfo, 'success', returnvalue?.executionTime || 0);
-        saveSubmission(jobInfo, returnvalue, 'success');
+        const submission = await saveSubmission(jobInfo, returnvalue, 'success');
+        if (submission) {
+          io.to(roomId).emit('execution-record-created', buildExecutionEventPayload(submission, returnvalue));
+        }
       }
       
       // Broadcast to room so owners/collaborators can see others' runs
@@ -327,9 +365,12 @@ queueEvents.on("completed", async (job) => {
         jobId,
         userId: jobInfo.userId,
         userName: jobInfo.userName,
+        language: jobInfo.language || 'javascript',
         output: returnvalue?.output || '',
         executionTime: returnvalue?.executionTime || 0,
-        status: returnvalue?.status === 'error' ? 'error' : 'success',
+        status: ['success', 'error', 'timeout', 'compile-error'].includes(returnvalue?.status)
+          ? returnvalue?.status
+          : 'error',
       });
 
       jobRoomMap.delete(jobId);
@@ -362,13 +403,18 @@ queueEvents.on("failed", async (job) => {
         jobId,
         userId: jobInfo.userId,
         userName: jobInfo.userName,
+        language: jobInfo.language || 'javascript',
         error: failedReason || 'Job failed',
         status: 'error',
       });
 
       // Persist failed analytics and submission
       persistAnalyticsForJob(jobInfo, 'error', 0);
-      saveSubmission(jobInfo, { output: '', error: failedReason || 'Job failed' }, 'error');
+      const failurePayload = { output: '', error: failedReason || 'Job failed' };
+      const submission = await saveSubmission(jobInfo, failurePayload, 'error');
+      if (submission) {
+        io.to(roomId).emit('execution-record-created', buildExecutionEventPayload(submission, failurePayload));
+      }
       jobRoomMap.delete(jobId);
     }
   }
@@ -382,13 +428,26 @@ queueEvents.on("error", (error) => {
 const saveSubmission = async (jobInfo, returnvalue, status) => {
   if (!jobInfo?.roomId || !jobInfo?.userId) return;
   try {
+    const output = returnvalue?.output || '';
+    const error = returnvalue?.compileError || returnvalue?.runtimeError || returnvalue?.error || '';
     const submission = new Submission({
       projectId: jobInfo.roomId,
       userId: jobInfo.userId,
+      username: jobInfo.userName || 'Unknown',
+      executionId: String(jobInfo.jobId || ''),
       code: jobInfo.code || '',
       language: jobInfo.language || 'javascript',
-      executionOutput: returnvalue?.output || '',
-      executionError: returnvalue?.compileError || returnvalue?.runtimeError || returnvalue?.error || '',
+      files: Array.isArray(jobInfo.executionFiles)
+        ? jobInfo.executionFiles.map((file) => ({
+            filename: String(file?.name || file?.filename || ''),
+            content: String(file?.content || ''),
+          })).filter((file) => file.filename)
+        : [],
+      output,
+      error,
+      logs: returnvalue?.logs || '',
+      executionOutput: output,
+      executionError: error,
       executionTime: returnvalue?.executionTime || 0,
       memoryUsed: returnvalue?.memoryUsed || 0,
       status,
@@ -399,8 +458,10 @@ const saveSubmission = async (jobInfo, returnvalue, status) => {
       $push: { submissions: submission._id }
     });
     console.log(`[Submission] Saved submission ${submission._id} for user ${jobInfo.userId} in project ${jobInfo.roomId}`);
+    return submission;
   } catch (err) {
     console.error('[Submission] Failed to save submission:', err.message);
+    return null;
   }
 };
 
@@ -491,6 +552,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/projects", require("./routes/projects"));
 app.use("/api/analytics", require("./routes/analytics"));
+app.use("/api/executions", require("./routes/executions"));
 app.use("/api/github", require("./routes/github"));
 app.use("/api/git", require("./routes/git"));
 app.use("/api/chat", require("./routes/chat"));

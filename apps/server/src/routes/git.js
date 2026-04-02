@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs').promises;
@@ -8,10 +9,12 @@ const Project = require('../models/Project');
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const { getGithubTokenFromUser } = require('../services/githubTokenService');
+const { checkProjectMember } = require('../middleware/checkProjectMember');
 
 const execFileAsync = promisify(execFile);
 const WORKSPACE_ROOT = '/tmp/workspaces';
 const MAX_FILE_MODIFICATIONS = Number(process.env.MAX_FILE_MODIFICATIONS || 1000);
+const DEFAULT_GIT_BRANCH = String(process.env.DEFAULT_GIT_BRANCH || 'main').trim() || 'main';
 
 // Only allow valid MongoDB ObjectIds as workspace directory names
 const isSafeId = (id) => /^[a-f0-9]{24}$/.test(String(id));
@@ -34,7 +37,53 @@ const runGit = async (cwd, args) => {
   }
 };
 
+const classifyGitErrorMessage = (message = '', fallback = 'Git operation failed') => {
+  const text = String(message || '').toLowerCase();
+
+  if (!text) return fallback;
+  if (text.includes('not a git repository')) return 'Workspace is not initialized. Run git init first.';
+  if (text.includes('could not read username') || text.includes('authentication failed') || text.includes('invalid username or password')) {
+    return 'GitHub authentication failed. Reconnect your GitHub account.';
+  }
+  if (text.includes('repository not found')) return 'Repository not found on GitHub.';
+  if (text.includes('permission to') && text.includes('denied')) return 'You do not have permission to access this repository.';
+  if (text.includes('nothing to commit')) return 'No file changes to commit.';
+  if (text.includes('pathspec')) return 'One or more selected files were not found in the workspace.';
+  if (text.includes('branch') && text.includes('already exists')) return 'That branch already exists.';
+  if (text.includes('merge conflict') || text.includes('conflict')) return 'Git has merge conflicts. Resolve them before continuing.';
+  if (text.includes('non-fast-forward')) return 'Push rejected because the branch has remote changes. Pull first and try again.';
+  if (text.includes('unable to access') || text.includes('could not resolve host') || text.includes('network is unreachable')) {
+    return 'GitHub is unreachable right now. Check your network connection.';
+  }
+  return message || fallback;
+};
+
+const sendGitError = (res, error, fallbackMessage, status = 500) => {
+  const rawMessage = error?.response?.data?.error || error?.stderr || error?.message || '';
+  return res.status(status).json({
+    error: classifyGitErrorMessage(rawMessage, fallbackMessage),
+  });
+};
+
 const getWorkspacePath = (projectId) => path.join(WORKSPACE_ROOT, String(projectId));
+
+// Middleware to verify JWT
+const verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_secret_key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+router.use('/:projectId', verifyToken, checkProjectMember());
 
 const getLanguageFromName = (fileName) => {
   const ext = String(fileName || '').split('.').pop().toLowerCase();
@@ -179,7 +228,7 @@ const refreshProjectGitStatus = async (project, user) => {
   const parsed = parsePorcelainStatus(statusResult.stdout || '');
 
   project.gitStatus = project.gitStatus || {};
-  project.gitStatus.branch = branchResult.success ? (branchResult.stdout || 'main') : (project.gitStatus.branch || 'main');
+  project.gitStatus.branch = branchResult.success ? (branchResult.stdout || DEFAULT_GIT_BRANCH) : (project.gitStatus.branch || DEFAULT_GIT_BRANCH);
   project.gitStatus.staged = parsed.staged;
   project.gitStatus.unstaged = parsed.unstaged;
   project.gitStatus.untracked = parsed.untracked;
@@ -190,9 +239,9 @@ const refreshProjectGitStatus = async (project, user) => {
 
 const resolveRemoteDefaultBranch = async (workspacePath) => {
   const remoteHead = await runGit(workspacePath, ['ls-remote', '--symref', 'origin', 'HEAD']);
-  if (!remoteHead.success) return 'main';
+  if (!remoteHead.success) return DEFAULT_GIT_BRANCH;
   const match = (remoteHead.stdout || '').match(/refs\/heads\/([^\s]+)/);
-  return match?.[1] || 'main';
+  return match?.[1] || DEFAULT_GIT_BRANCH;
 };
 
 // Ensure the workspace directory has a git repo; init if not
@@ -200,6 +249,7 @@ const ensureGitInit = async (workspacePath, userEmail, userName) => {
   try { await fs.access(path.join(workspacePath, '.git')); return; } catch {}
   await fs.mkdir(workspacePath, { recursive: true });
   await runGit(workspacePath, ['init']);
+  await runGit(workspacePath, ['symbolic-ref', 'HEAD', `refs/heads/${DEFAULT_GIT_BRANCH}`]);
   await runGit(workspacePath, ['config', 'user.email', userEmail || 'collab@code.io']);
   await runGit(workspacePath, ['config', 'user.name', userName || 'CollabCode']);
 };
@@ -227,20 +277,80 @@ const classifyGitRemoteError = (stderr = '') => {
   return null;
 };
 
-// Middleware to verify JWT
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
+const parseGitHubRepoFromRemote = (remoteUrl = '') => {
+  const raw = String(remoteUrl || '').trim();
+  if (!raw) return null;
+
+  // HTTPS form: https://github.com/owner/repo(.git)
+  try {
+    const parsed = new URL(raw);
+    if (parsed.hostname.toLowerCase() === 'github.com') {
+      const [owner, repoWithMaybeGit] = parsed.pathname.replace(/^\//, '').split('/');
+      const repo = (repoWithMaybeGit || '').replace(/\.git$/i, '');
+      if (owner && repo) {
+        return { owner, repo };
+      }
+    }
+  } catch {
+    // Continue to SSH parsing.
+  }
+
+  // SSH form: git@github.com:owner/repo.git
+  const sshMatch = raw.match(/^git@github\.com:([^/]+)\/([^\s]+?)(\.git)?$/i);
+  if (sshMatch) {
+    return { owner: sshMatch[1], repo: sshMatch[2] };
+  }
+
+  return null;
+};
+
+const validateGithubRepositoryAccess = async ({ githubToken, remoteUrl }) => {
+  const parsedRepo = parseGitHubRepoFromRemote(remoteUrl);
+  if (!parsedRepo) {
+    return { ok: false, status: 404, body: { error: 'Repository not found in your GitHub account. Please create it first.' } };
+  }
+
+  let me;
+  try {
+    const meRes = await axios.get('https://api.github.com/user', {
+      headers: {
+        Authorization: `token ${githubToken}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    me = meRes.data;
+  } catch (error) {
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      return { ok: false, status: 401, body: { error: 'GitHub authentication required', needsAuth: true } };
+    }
+    return { ok: false, status: 500, body: { error: 'Failed to validate GitHub authentication' } };
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_secret_key');
-    req.userId = decoded.userId;
-    next();
+    const repoRes = await axios.get(`https://api.github.com/repos/${parsedRepo.owner}/${parsedRepo.repo}`, {
+      headers: {
+        Authorization: `token ${githubToken}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+
+    const ownerLogin = String(repoRes.data?.owner?.login || '').toLowerCase();
+    const currentLogin = String(me?.login || '').toLowerCase();
+
+    if (!ownerLogin || !currentLogin || ownerLogin !== currentLogin) {
+      return { ok: false, status: 403, body: { error: 'Access denied' } };
+    }
   } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      return { ok: false, status: 401, body: { error: 'GitHub authentication required', needsAuth: true } };
+    }
+    if (error.response?.status === 404) {
+      return { ok: false, status: 404, body: { error: 'Repository not found in your GitHub account. Please create it first.' } };
+    }
+    return { ok: false, status: 500, body: { error: 'Failed to validate repository access' } };
   }
+
+  return { ok: true };
 };
 
 // Get git status for a project
@@ -248,17 +358,9 @@ router.get('/:projectId/status', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    // Check access
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     const user = await User.findById(req.userId).lean();
@@ -267,10 +369,82 @@ router.get('/:projectId/status', verifyToken, async (req, res) => {
 
     res.json({
       ...project.gitStatus,
-      remoteUrl: project.githubUrl || ''
+      remoteUrl: project.githubUrl || '',
+      remoteConnected: Boolean(project.githubUrl),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to load git status');
+  }
+});
+
+// POST /:projectId/remote — connect/update a GitHub repository URL for this project
+router.post('/:projectId/remote', verifyToken, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { remote } = req.body || {};
+    if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
+
+    const project = await Project.findById(projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can connect repository' });
+
+    const remoteUrl = normalizeRemoteUrl(remote);
+    if (!remoteUrl) {
+      return res.status(400).json({ error: 'Invalid repository URL' });
+    }
+
+    const user = await User.findById(req.userId).lean();
+    const githubToken = getUserGithubToken(user);
+    if (!githubToken) {
+      return res.status(428).json({ error: 'Please connect your GitHub account first', needsAuth: true });
+    }
+
+    const validation = await validateGithubRepositoryAccess({ githubToken, remoteUrl });
+    if (!validation.ok) {
+      return res.status(validation.status).json(validation.body);
+    }
+
+    project.githubUrl = remoteUrl;
+    await project.save();
+
+    return res.json({
+      message: 'Repository connected successfully',
+      remoteUrl,
+      remoteConnected: true,
+    });
+  } catch (error) {
+    return sendGitError(res, error, 'Failed to connect repository');
+  }
+});
+
+// DELETE /:projectId/remote — remove the repository association from this project
+router.delete('/:projectId/remote', verifyToken, async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
+
+    const project = await Project.findById(projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can remove repository' });
+
+    const workspacePath = getWorkspacePath(projectId);
+    try {
+      await fs.access(path.join(workspacePath, '.git'));
+      await runGit(workspacePath, ['remote', 'remove', 'origin']);
+    } catch {
+      // No workspace/remote configured yet; ignore.
+    }
+
+    project.githubUrl = '';
+    await project.save();
+
+    return res.json({
+      message: 'Repository removed successfully',
+      remoteUrl: '',
+      remoteConnected: false,
+    });
+  } catch (error) {
+    return sendGitError(res, error, 'Failed to remove repository');
   }
 });
 
@@ -280,15 +454,9 @@ router.post('/:projectId/stage', verifyToken, async (req, res) => {
     const { projectId } = req.params;
     const { files } = req.body; // Array of file paths
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     const normalizedFiles = Array.isArray(files) ? files.filter(Boolean) : [];
@@ -301,7 +469,7 @@ router.post('/:projectId/stage', verifyToken, async (req, res) => {
 
     const stageResult = await runGit(workspacePath, ['add', '--', ...normalizedFiles]);
     if (!stageResult.success) {
-      return res.status(400).json({ error: stageResult.stderr || 'Failed to stage files' });
+      return res.status(400).json({ error: classifyGitErrorMessage(stageResult.stderr, 'Failed to stage files') });
     }
 
     await refreshProjectGitStatus(project, user);
@@ -309,7 +477,7 @@ router.post('/:projectId/stage', verifyToken, async (req, res) => {
     await project.save();
     res.json(project.gitStatus);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to stage files');
   }
 });
 
@@ -319,15 +487,9 @@ router.post('/:projectId/unstage', verifyToken, async (req, res) => {
     const { projectId } = req.params;
     const { files } = req.body; // Array of file paths
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     const normalizedFiles = Array.isArray(files) ? files.filter(Boolean) : [];
@@ -348,7 +510,7 @@ router.post('/:projectId/unstage', verifyToken, async (req, res) => {
       unstageResult = await runGit(workspacePath, ['rm', '--cached', '-r', '--', ...normalizedFiles]);
     }
     if (!unstageResult.success) {
-      return res.status(400).json({ error: unstageResult.stderr || 'Failed to unstage files' });
+      return res.status(400).json({ error: classifyGitErrorMessage(unstageResult.stderr, 'Failed to unstage files') });
     }
 
     await refreshProjectGitStatus(project, user);
@@ -356,7 +518,7 @@ router.post('/:projectId/unstage', verifyToken, async (req, res) => {
     await project.save();
     res.json(project.gitStatus);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to unstage files');
   }
 });
 
@@ -370,15 +532,9 @@ router.post('/:projectId/commit', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Commit message is required' });
     }
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     const user = await User.findById(req.userId).lean();
@@ -390,7 +546,7 @@ router.post('/:projectId/commit', verifyToken, async (req, res) => {
 
     const commitResult = await runGit(workspacePath, ['commit', '-m', message.trim()]);
     if (!commitResult.success) {
-      return res.status(400).json({ error: commitResult.stderr || 'Commit failed' });
+      return res.status(400).json({ error: classifyGitErrorMessage(commitResult.stderr, 'Commit failed') });
     }
 
     const hashResult = await runGit(workspacePath, ['rev-parse', '--short', 'HEAD']);
@@ -402,7 +558,7 @@ router.post('/:projectId/commit', verifyToken, async (req, res) => {
       message: message.trim(),
       author: req.userId,
       authorName: user?.name || 'Unknown User',
-      branch: project.gitStatus?.branch || 'main',
+      branch: project.gitStatus?.branch || DEFAULT_GIT_BRANCH,
       date: new Date(),
       files: stagedFiles
     };
@@ -423,7 +579,7 @@ router.post('/:projectId/commit', verifyToken, async (req, res) => {
       gitStatus: project.gitStatus
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to create commit');
   }
 });
 
@@ -432,17 +588,9 @@ router.get('/:projectId/commits', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    // Check access
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     const commits = Array.isArray(project.gitStatus?.commits) ? project.gitStatus.commits : [];
@@ -459,7 +607,7 @@ router.get('/:projectId/commits', verifyToken, async (req, res) => {
       : [];
 
     const authorNameById = new Map(users.map((user) => [String(user._id), user.name]));
-    const projectBranch = project.gitStatus?.branch || 'main';
+    const projectBranch = project.gitStatus?.branch || DEFAULT_GIT_BRANCH;
 
     const normalizedCommits = commits.map((commit) => {
       const authorId = commit?.author ? String(commit.author) : null;
@@ -475,9 +623,49 @@ router.get('/:projectId/commits', verifyToken, async (req, res) => {
       };
     });
 
+    normalizedCommits.sort((a, b) => {
+      const aTs = new Date(a?.date || 0).getTime();
+      const bTs = new Date(b?.date || 0).getTime();
+      return bTs - aTs;
+    });
+
     res.json(normalizedCommits);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to load commit history');
+  }
+});
+
+// Delete commit metadata entry from project history
+router.delete('/:projectId/commits/:commitId', verifyToken, async (req, res) => {
+  try {
+    const { projectId, commitId } = req.params;
+
+    const project = req.project || await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const commits = Array.isArray(project.gitStatus?.commits) ? project.gitStatus.commits : [];
+    const targetCommit = commits.find((c) => String(c?.id || '') === String(commitId));
+    if (!targetCommit) {
+      return res.status(404).json({ error: 'Commit not found' });
+    }
+
+    const isOwner = project.owner.toString() === req.userId;
+    const isAuthor = String(targetCommit?.author || '') === String(req.userId);
+    if (!isOwner && !isAuthor) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    project.gitStatus.commits = commits.filter((c) => String(c?.id || '') !== String(commitId));
+    await project.save();
+
+    return res.json({
+      message: 'Commit history entry deleted',
+      commits: project.gitStatus.commits,
+    });
+  } catch (error) {
+    return sendGitError(res, error, 'Failed to delete commit history entry');
   }
 });
 
@@ -486,17 +674,9 @@ router.get('/:projectId/blame/:fileName', verifyToken, async (req, res) => {
   try {
     const { projectId, fileName } = req.params;
 
-    const project = await Project.findById(projectId).populate('owner', 'name email');
+    const project = req.project || await Project.findById(projectId).populate('owner', 'name email');
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    // Check access
-    const hasAccess = project.owner._id.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     // Find the file
@@ -529,17 +709,9 @@ router.post('/:projectId/track-modification', verifyToken, async (req, res) => {
       return res.json({ success: false, skipped: true, reason: 'Invalid fileName/lineNumber' });
     }
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
-    }
-
-    // Check access
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'You do not have access to this project' });
     }
 
     // Find the file
@@ -607,22 +779,42 @@ router.post('/:projectId/track-modification', verifyToken, async (req, res) => {
 router.post('/:projectId/init', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
+    const { remote } = req.body || {};
     if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can initialize git' });
 
     const user = await User.findById(req.userId).lean();
+    const githubToken = getUserGithubToken(user);
+    if (!githubToken) {
+      return res.status(428).json({ error: 'Please connect your GitHub account first', needsAuth: true });
+    }
+
+    const remoteUrl = normalizeRemoteUrl(remote || project.githubUrl);
+    if (!remoteUrl) {
+      return res.status(404).json({ error: 'Repository not found in your GitHub account. Please create it first.' });
+    }
+
+    const validation = await validateGithubRepositoryAccess({ githubToken, remoteUrl });
+    if (!validation.ok) {
+      return res.status(validation.status).json(validation.body);
+    }
+
+    project.githubUrl = remoteUrl;
+
     const workspacePath = getWorkspacePath(projectId);
     await ensureGitInit(workspacePath, user?.email, user?.name);
+    await runGit(workspacePath, ['checkout', '-B', project.gitStatus?.branch || DEFAULT_GIT_BRANCH]);
     await syncFilesToDisk(workspacePath, project.files || []);
+    await setOriginWithAuth(workspacePath, remoteUrl, githubToken);
     await runGit(workspacePath, ['add', '.']);
     if ((project.files || []).length > 0) {
       await runGit(workspacePath, ['commit', '-m', 'Initial commit', '--allow-empty']);
     }
 
     project.gitStatus = project.gitStatus || {};
-    project.gitStatus.branch = project.gitStatus.branch || 'main';
+    project.gitStatus.branch = project.gitStatus.branch || DEFAULT_GIT_BRANCH;
     project.gitStatus.staged = [];
     project.gitStatus.unstaged = (project.files || []).map(f => f.name).filter(n => !n.endsWith('/'));
     project.gitStatus.untracked = [];
@@ -631,7 +823,7 @@ router.post('/:projectId/init', verifyToken, async (req, res) => {
     res.json({ message: 'Git repository initialized', branch: project.gitStatus.branch });
   } catch (error) {
     console.error('[Git] init error:', error.message);
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to initialize git workspace');
   }
 });
 
@@ -639,22 +831,27 @@ router.post('/:projectId/init', verifyToken, async (req, res) => {
 router.post('/:projectId/push', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { message, remote } = req.body;
+    const { message, remote, branch: requestedBranch } = req.body;
     if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can push' });
 
     const user = await User.findById(req.userId).lean();
     const githubToken = getUserGithubToken(user);
     if (!githubToken) {
-      return res.status(428).json({ error: 'GitHub not linked. Connect GitHub first.', needsAuth: true });
+      return res.status(428).json({ error: 'Please connect your GitHub account first', needsAuth: true });
     }
 
     const remoteUrl = normalizeRemoteUrl(remote || project.githubUrl);
     if (!remoteUrl) {
-      return res.status(400).json({ error: 'No remote URL set. Export project to GitHub first to create the remote repo.' });
+      return res.status(404).json({ error: 'Repository not found in your GitHub account. Please create it first.' });
+    }
+
+    const validation = await validateGithubRepositoryAccess({ githubToken, remoteUrl });
+    if (!validation.ok) {
+      return res.status(validation.status).json(validation.body);
     }
     project.githubUrl = remoteUrl;
 
@@ -669,7 +866,13 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
     const commitMsg = (message || '').trim() || 'Update from CollabCode';
     await runGit(workspacePath, ['commit', '-m', commitMsg, '--allow-empty']);
 
-    const branch = project.gitStatus?.branch || await resolveRemoteDefaultBranch(workspacePath);
+    let branch = String(requestedBranch || '').trim();
+    if (branch && !/^[a-zA-Z0-9/_.-]+$/.test(branch)) {
+      return res.status(400).json({ error: 'Invalid branch name' });
+    }
+    if (!branch) {
+      branch = project.gitStatus?.branch || await resolveRemoteDefaultBranch(workspacePath);
+    }
     await runGit(workspacePath, ['checkout', '-B', branch]);
     let pushResult = await runGit(workspacePath, ['push', '-u', 'origin', branch, '--force-with-lease']);
     if (!pushResult.success) {
@@ -706,7 +909,7 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Git] push error:', error.message);
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to push to GitHub');
   }
 });
 
@@ -714,10 +917,10 @@ router.post('/:projectId/push', verifyToken, async (req, res) => {
 router.post('/:projectId/pull', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { remote } = req.body;
+    const { remote, branch: requestedBranch } = req.body;
     if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can pull' });
 
@@ -740,7 +943,13 @@ router.post('/:projectId/pull', verifyToken, async (req, res) => {
     await setOriginWithAuth(workspacePath, remoteUrl, githubToken);
 
     await runGit(workspacePath, ['fetch', 'origin']);
-    const branch = project.gitStatus?.branch || await resolveRemoteDefaultBranch(workspacePath);
+    let branch = String(requestedBranch || '').trim();
+    if (branch && !/^[a-zA-Z0-9/_.-]+$/.test(branch)) {
+      return res.status(400).json({ error: 'Invalid branch name' });
+    }
+    if (!branch) {
+      branch = project.gitStatus?.branch || await resolveRemoteDefaultBranch(workspacePath);
+    }
     const checkoutResult = await runGit(workspacePath, ['checkout', branch]);
     if (!checkoutResult.success) {
       await runGit(workspacePath, ['checkout', '-B', branch, `origin/${branch}`]);
@@ -774,7 +983,7 @@ router.post('/:projectId/pull', verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Git] pull error:', error.message);
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to pull from GitHub');
   }
 });
 
@@ -783,29 +992,49 @@ router.get('/:projectId/branches', verifyToken, async (req, res) => {
   try {
     const { projectId } = req.params;
     if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
-
     const workspacePath = getWorkspacePath(projectId);
-    try { await fs.access(path.join(workspacePath, '.git')); } catch {
-      const branch = project.gitStatus?.branch || 'main';
-      return res.json({ branches: [branch], current: branch });
+    const user = await User.findById(req.userId).lean();
+    const githubToken = getUserGithubToken(user);
+    const remoteUrl = normalizeRemoteUrl(project.githubUrl || '');
+
+    await ensureGitInit(workspacePath, user?.email, user?.name);
+
+    if (remoteUrl && githubToken) {
+      await setOriginWithAuth(workspacePath, remoteUrl, githubToken);
+      await runGit(workspacePath, ['fetch', '--prune', 'origin']);
     }
 
-    const result = await runGit(workspacePath, ['branch', '-a']);
-    const lines = (result.stdout || '').split('\n').filter(Boolean);
-    const branches = [...new Set(
-      lines.map(l => l.replace(/^\*?\s+/, '').replace(/^remotes\/origin\//, '').trim()).filter(Boolean)
-    )];
-    const current = (lines.find(l => l.startsWith('*')) || '').replace(/^\*\s+/, '').trim() || project.gitStatus?.branch || 'main';
+    const localResult = await runGit(workspacePath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
+    const localBranches = (localResult.stdout || '').split('\n').map((b) => b.trim()).filter(Boolean);
+
+    const remoteResult = await runGit(workspacePath, ['ls-remote', '--heads', 'origin']);
+    const remoteBranches = (remoteResult.stdout || '')
+      .split('\n')
+      .map((line) => {
+        const match = line.match(/refs\/heads\/([^\s]+)$/);
+        return match ? match[1] : '';
+      })
+      .filter(Boolean);
+
+    const currentResult = await runGit(workspacePath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const current = currentResult.success
+      ? (currentResult.stdout || project.gitStatus?.branch || DEFAULT_GIT_BRANCH)
+      : (project.gitStatus?.branch || DEFAULT_GIT_BRANCH);
+
+    const branches = [...new Set([...localBranches, ...remoteBranches])]
+      .filter((name) => name && name !== 'HEAD')
+      .sort((a, b) => a.localeCompare(b));
+
+    if (!branches.includes(current)) {
+      branches.unshift(current);
+    }
 
     res.json({ branches, current });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to list branches');
   }
 });
 
@@ -819,7 +1048,7 @@ router.post('/:projectId/branch', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid branch name' });
     }
     const safeName = name.trim();
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (project.owner.toString() !== req.userId) return res.status(403).json({ error: 'Only owner can manage branches' });
 
@@ -830,12 +1059,19 @@ router.post('/:projectId/branch', verifyToken, async (req, res) => {
     await runGit(workspacePath, ['add', '.']);
     await runGit(workspacePath, ['commit', '-m', `Checkpoint before switching to ${safeName}`, '--allow-empty']);
 
-    const result = action === 'switch'
-      ? await runGit(workspacePath, ['checkout', safeName])
-      : await runGit(workspacePath, ['checkout', '-b', safeName]);
+    let result;
+    if (action === 'switch') {
+      result = await runGit(workspacePath, ['checkout', safeName]);
+      if (!result.success) {
+        // Support switching to remote-only branches without requiring manual local branch creation.
+        result = await runGit(workspacePath, ['checkout', '-B', safeName, `origin/${safeName}`]);
+      }
+    } else {
+      result = await runGit(workspacePath, ['checkout', '-b', safeName]);
+    }
 
     if (!result.success && result.stderr && !result.stderr.includes('Switched')) {
-      return res.status(400).json({ error: result.stderr });
+      return res.status(400).json({ error: classifyGitErrorMessage(result.stderr, 'Branch switch failed') });
     }
 
     const githubToken = getUserGithubToken(user);
@@ -850,7 +1086,7 @@ router.post('/:projectId/branch', verifyToken, async (req, res) => {
 
     res.json({ message: `Switched to branch "${safeName}"`, branch: safeName });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to update branch');
   }
 });
 
@@ -861,11 +1097,8 @@ router.get('/:projectId/diff', verifyToken, async (req, res) => {
     const { file } = req.query;
     if (!isSafeId(projectId)) return res.status(400).json({ error: 'Invalid project ID' });
 
-    const project = await Project.findById(projectId);
+    const project = req.project || await Project.findById(projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const hasAccess = project.owner.toString() === req.userId ||
-      project.collaborators.some(c => c.userId?.toString() === req.userId);
-    if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
 
     const workspacePath = getWorkspacePath(projectId);
     try { await fs.access(workspacePath); } catch {
@@ -886,7 +1119,7 @@ router.get('/:projectId/diff', verifyToken, async (req, res) => {
 
     res.json({ diff: result.stdout || '', message: result.stdout ? undefined : 'No changes detected' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendGitError(res, error, 'Failed to generate diff');
   }
 });
 

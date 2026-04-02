@@ -1,29 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Download, X, Github, LogIn } from 'lucide-react';
+import React, { useState } from 'react';
+import { Download, X } from 'lucide-react';
 import { API_URL } from '../config/runtime';
 import { authStorage } from '../services/authStorage';
 
 export default function ExportModal({ isOpen, onClose, projectId, files, projectName }) {
   const [exportFormat, setExportFormat] = useState('json');
-  const [githubLinked, setGithubLinked] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [authLoading, setAuthLoading] = useState(false);
-
-  // Check for GitHub token on mount
-  useEffect(() => {
-    const fetchGithubStatus = async () => {
-      if (!isOpen) return;
-      try {
-        const res = await fetch(`${API_URL}/github/status`, { headers: authStorage.getAuthHeaders() });
-        const data = await res.json();
-        setGithubLinked(Boolean(data?.linked));
-      } catch {
-        setGithubLinked(false);
-      }
-    };
-
-    fetchGithubStatus();
-  }, [isOpen]);
 
   const handleExportJSON = () => {
     const projectData = {
@@ -90,74 +72,7 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
     }
   };
 
-  const handleExportGitHub = async () => {
-    setIsExporting(true);
-    try {
-      const repoName = projectName
-        .toLowerCase()
-        .replace(/\s+/g, '-')
-        .replace(/[^a-z0-9-]/g, '') || 'collabcode-project';
 
-      const authToken = authStorage.getToken();
-      if (!authToken) {
-        throw new Error('You must be logged in to export to GitHub');
-      }
-
-      let response = await fetch(`${API_URL}/github/export/${projectId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          repositoryName: repoName,
-          returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        // Redirect to OAuth in same tab and return to this page.
-        if (error.needsAuth && error.authUrl) {
-          window.location.assign(error.authUrl);
-          return;
-        } else {
-          throw new Error(error.error || 'GitHub export failed');
-        }
-      }
-
-      const data = await response.json();
-      alert(`✅ Exported to GitHub: ${data.repositoryUrl}`);
-      if (data.repositoryUrl) {
-        window.open(data.repositoryUrl, '_blank');
-      }
-      onClose();
-    } catch (err) {
-      console.error('[GitHub Export Error]:', err);
-      alert(`GitHub export failed:\n\n${err.message}`);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const startGithubLogin = async () => {
-    try {
-      setAuthLoading(true);
-      const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      const res = await fetch(`${API_URL}/github/auth-url?returnTo=${encodeURIComponent(returnTo)}`, { headers: authStorage.getAuthHeaders() });
-      const data = await res.json();
-      if (data.authUrl) {
-        window.location.assign(data.authUrl);
-      } else {
-        alert(data.error || 'GitHub OAuth not configured');
-        setAuthLoading(false);
-      }
-    } catch (err) {
-      console.error('GitHub auth init failed:', err);
-      alert('Failed to start GitHub login');
-      setAuthLoading(false);
-    }
-  };
 
   if (!isOpen) return null;
 
@@ -209,51 +124,7 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
                 <p className="text-gray-400 text-xs">All files in one archive</p>
               </div>
             </label>
-
-            <label className="flex items-center p-3 border border-gray-600 rounded cursor-pointer hover:bg-gray-750 transition">
-              <input
-                type="radio"
-                name="format"
-                value="github"
-                checked={exportFormat === 'github'}
-                onChange={(e) => setExportFormat(e.target.value)}
-                className="w-4 h-4 mr-3"
-              />
-              <div>
-                <p className="text-white font-semibold flex items-center gap-1">
-                  <Github size={14} /> GitHub
-                </p>
-                <p className="text-gray-400 text-xs">Push to GitHub repository</p>
-              </div>
-            </label>
           </div>
-
-          {exportFormat === 'github' && (
-            <div className="mt-4 p-3 bg-gray-700 border border-gray-600 rounded space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-white text-sm font-semibold">GitHub Access</p>
-                  <p className="text-gray-400 text-xs">{githubLinked ? 'Connected' : 'Sign in to push directly'}</p>
-                </div>
-                {!githubLinked && (
-                  <button
-                    type="button"
-                    onClick={startGithubLogin}
-                    disabled={authLoading}
-                    className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded flex items-center gap-1 disabled:opacity-60"
-                  >
-                    <LogIn size={14} /> {authLoading ? 'Opening...' : 'Sign in'}
-                  </button>
-                )}
-              </div>
-
-              {githubLinked && (
-                <div className="text-xs text-green-400 bg-gray-800 border border-gray-700 rounded px-2 py-1">
-                  ✓ GitHub connected (token stored server-side)
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         <div className="flex gap-3">
@@ -268,7 +139,6 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
             onClick={() => {
               if (exportFormat === 'json') handleExportJSON();
               else if (exportFormat === 'zip') handleExportZip();
-              else handleExportGitHub();
             }}
             disabled={isExporting}
             className="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition font-semibold flex items-center justify-center gap-2 disabled:opacity-50"

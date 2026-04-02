@@ -1,6 +1,7 @@
 const Project = require('../models/Project');
 const { isProjectMember, loadProjectMemberContext } = require('../middleware/checkProjectMember');
 const axios = require('axios');
+const { collectRequiredExecutionFiles } = require('../utils/executionDependencies');
 
 const ROOM_LIMITS = {
   MAX_PROJECT_FILES: Number(process.env.MAX_PROJECT_FILES || 200),
@@ -633,17 +634,35 @@ class RoomManager {
 
       // Wake worker service before queueing on platforms where worker can sleep.
       await this.warmWorkerForExecution();
+
+      const entryFileName = data.activeFileName || data.entryFileName || null;
+      const incomingFiles = Array.isArray(data.files) ? data.files : [];
+      const dependencyFiles = collectRequiredExecutionFiles({
+        language: data.language,
+        entryFileName,
+        activeCode: data.code,
+        files: incomingFiles,
+      });
+
+      const filesForExecution = dependencyFiles.length > 0
+        ? dependencyFiles.map((file) => ({ name: file.filename, content: file.content }))
+        : incomingFiles;
+
+      const entryFile = filesForExecution.find((file) => String(file.name || '') === String(entryFileName || ''));
+      const codeForExecution = entryFile?.content || data.code;
+
+      console.log(`[RoomManager] Prepared ${filesForExecution.length}/${incomingFiles.length || 0} file(s) for execution`);
       
       // Add job to execution queue
       const job = await this.executionQueue.add('execute', {
         roomId,
         userId: user.userId,
         userName: user.userName,
-        code: data.code,
+        code: codeForExecution,
         language: data.language,
         input: data.input || '',
-        entryFileName: data.activeFileName || data.entryFileName || null,
-        files: Array.isArray(data.files) ? data.files : []
+        entryFileName,
+        files: filesForExecution
       });
 
       console.log(`[RoomManager] Job added with ID: ${job.id}`);
@@ -651,12 +670,14 @@ class RoomManager {
       // Store the job-room-socket mapping for later result delivery (user-specific)
       if (global.jobRoomMap) {
         global.jobRoomMap.set(job.id, {
+          jobId: job.id,
           roomId,
           socketId: socket.id,
           userId: user.userId,
           userName: user.userName,
-          code: data.code,
+          code: codeForExecution,
           language: data.language,
+          executionFiles: filesForExecution,
         });
         console.log(`[RoomManager] Stored mapping: job ${job.id} -> room ${roomId}, socket ${socket.id}, user ${user.userName}`);
       }

@@ -44,6 +44,8 @@ services:
       dockerfile: Dockerfile
     container_name: collab-code-worker
     restart: always
+    env_file:
+      - ./.env
     environment:
       REDIS_URL: redis://redis:6379
       MONGODB_URI: ${MONGODB_URI}
@@ -92,10 +94,14 @@ services:
     build:
       context: ./apps/client
       dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: ${CLIENT_PUBLIC_API_URL:-http://localhost:5000}
     container_name: collab-code-client
     restart: always
     ports:
       - "3000:3000"
+    environment:
+      NODE_ENV: production
     depends_on:
       server:
         condition: service_healthy

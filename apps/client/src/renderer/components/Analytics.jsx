@@ -1,252 +1,568 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Users, TrendingUp, Activity, ChevronLeft, User } from 'lucide-react';
-import AllUsersAnalytics from './AllUsersAnalytics';
+import {
+  BarChart3,
+  Filter,
+  PlayCircle,
+  Search,
+  X,
+} from 'lucide-react';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { API_URL } from '../config/runtime';
+import { authStorage } from '../services/authStorage';
+import { Trash2 } from 'lucide-react';
 
-export default function Analytics({ data, allUsersData, activityFeed = [] }) {
-  const [selectedUser, setSelectedUser] = useState(null);
-  
-  // If we have allUsersData, show list view for owner
-  const isOwnerView = allUsersData && allUsersData.length > 0;
-  const recentActivity = activityFeed.slice(0, 8);
+const STATUS_COLORS = {
+  success: 'text-emerald-300 bg-emerald-900/40 border-emerald-500/40',
+  error: 'text-rose-300 bg-rose-900/40 border-rose-500/40',
+  timeout: 'text-rose-300 bg-rose-900/40 border-rose-500/40',
+  running: 'text-amber-300 bg-amber-900/40 border-amber-500/40',
+};
 
-  // If a user is selected, show their individual analytics
-  if (selectedUser) {
-    return (
-      <div>
-        <button 
-          onClick={() => setSelectedUser(null)}
-          className="flex items-center gap-2 text-blue-400 hover:text-blue-300 mb-4 transition-colors"
-        >
-          <ChevronLeft size={20} />
-          <span>Back to Users</span>
-        </button>
-        <IndividualAnalytics data={selectedUser} />
-      </div>
-    );
+const STATUS_LABELS = {
+  success: 'Success',
+  error: 'Error',
+  timeout: 'Timeout',
+  running: 'Running',
+};
+
+const CHART_COLORS = ['#10b981', '#ef4444'];
+
+const toKey = (entry) => entry.executionId || entry.id || `${entry.username}-${entry.createdAt}`;
+
+const toMinuteBucket = (isoDate) => {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) {
+    return 'Unknown';
   }
 
-  // Show user list for owners
-  if (isOwnerView) {
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 mb-4">
-          <Users className="text-blue-400" size={24} />
-          <h3 className="text-white font-bold text-lg">Team Members</h3>
-          <span className="text-gray-400 text-sm">({allUsersData.length} collaborator{allUsersData.length !== 1 ? 's' : ''})</span>
-        </div>
+  date.setSeconds(0, 0);
+  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+};
 
-        {recentActivity.length > 0 && (
-          <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg">
-            <p className="text-gray-300 text-sm font-medium mb-3 flex items-center gap-2">
-              <Activity size={16} className="text-blue-400" />
-              Live execution activity
-            </p>
-            <div className="space-y-2 max-h-48 overflow-auto pr-1">
-              {recentActivity.map((item, idx) => (
-                <div key={idx} className="flex items-start justify-between bg-gray-900 px-3 py-2 rounded">
-                  <div>
-                    <p className="text-sm text-white font-semibold">{item.userName || 'Unknown'}</p>
-                    <p className="text-xs text-gray-400 break-all">{item.status === 'success' ? 'Ran code successfully' : 'Execution error'}{item.executionTime ? ` • ${item.executionTime}ms` : ''}</p>
-                  </div>
-                  <span className={`text-xs font-semibold ${item.status === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                    {item.status === 'success' ? 'Success' : 'Error'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        
-        <div className="space-y-2">
-          {allUsersData.map((user, index) => {
-            const userSuccessRate = user.totalRuns > 0 
-              ? Math.round((user.successfulRuns / user.totalRuns) * 100) 
-              : 0;
-            
-            return (
-              <button
-                key={index}
-                onClick={() => setSelectedUser(user)}
-                className="w-full bg-gray-800 border border-gray-700 p-4 rounded-lg hover:border-blue-500 hover:bg-gray-750 transition-all text-left group"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-blue-600 rounded-full p-2">
-                      <User size={20} className="text-white" />
-                    </div>
-                    <div>
-                      <h4 className="text-white font-semibold group-hover:text-blue-400 transition-colors">
-                        {user.userName || 'Unknown User'}
-                      </h4>
-                      <p className="text-xs text-gray-500">
-                        Last active: {new Date(user.lastActivity).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  <Activity className="text-gray-500 group-hover:text-blue-400 transition-colors" size={20} />
-                </div>
-                
-                <div className="grid grid-cols-4 gap-3 mt-3">
-                  <div className="text-center">
-                    <p className="text-gray-400 text-xs">Total Runs</p>
-                    <p className="text-white font-bold text-lg">{user.totalRuns}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-gray-400 text-xs">Successful</p>
-                    <p className="text-green-400 font-bold text-lg">{user.successfulRuns}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-gray-400 text-xs">Failed</p>
-                    <p className="text-red-400 font-bold text-lg">{user.failedRuns}</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-gray-400 text-xs">Success Rate</p>
-                    <p className="text-blue-400 font-bold text-lg">{userSuccessRate}%</p>
-                  </div>
-                </div>
+const formatDuration = (ms) => {
+  const value = Number(ms || 0);
+  return `${value} ms`;
+};
 
-                <div className="mt-3 bg-gray-900 rounded-full h-2 overflow-hidden">
-                  <div 
-                    className="bg-green-500 h-full transition-all duration-300"
-                    style={{ width: `${userSuccessRate}%` }}
-                  />
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
+export default function Analytics({
+  projectId,
+  socket,
+  data,
+  allUsersData,
+  activityFeed = [],
+}) {
+  const [executions, setExecutions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [selectedExecution, setSelectedExecution] = useState(null);
+  const [outputLoading, setOutputLoading] = useState(false);
+  const [deletingExecutionId, setDeletingExecutionId] = useState('');
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [filters, setFilters] = useState({
+    user: '',
+    language: '',
+    status: '',
+    search: '',
+  });
 
-  // Regular user view (their own analytics)
-  if (!data) {
-    return <div className="text-gray-400">No analytics data available</div>;
-  }
+  const fetchExecutions = useCallback(async () => {
+    if (!projectId) return;
 
-  return <IndividualAnalytics data={data} />;
-}
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_URL}/executions`, {
+        params: {
+          projectId,
+          userId: filters.user || undefined,
+          language: filters.language || undefined,
+          status: filters.status || undefined,
+          search: filters.search || undefined,
+          limit: 150,
+        },
+        headers: authStorage.getAuthHeaders(),
+      });
 
-// Individual Analytics Component
-function IndividualAnalytics({ data }) {
-  if (!data) {
-    return <div className="text-gray-400">No analytics data available</div>;
-  }
-
-  const successRate = data.totalRuns > 0 
-    ? Math.round((data.successfulRuns / data.totalRuns) * 100) 
-    : 0;
-
-  const avgExecutionTime = data.executionTimes && data.executionTimes.length > 0
-    ? Math.round(data.executionTimes.reduce((a, b) => a + b, 0) / data.executionTimes.length)
-    : 0;
-
-  const chartData = [
-    {
-      name: 'Runs',
-      Successful: data.successfulRuns,
-      Failed: data.failedRuns
+      setExecutions(response.data?.items || []);
+      setError('');
+    } catch (fetchError) {
+      setError(fetchError?.response?.data?.error || 'Failed to fetch execution history');
+    } finally {
+      setLoading(false);
     }
-  ];
+  }, [filters.language, filters.search, filters.status, filters.user, projectId]);
 
-  const pieData = [
-    { name: 'Successful', value: data.successfulRuns, color: '#10b981' },
-    { name: 'Failed', value: data.failedRuns, color: '#ef4444' }
-  ];
+  useEffect(() => {
+    fetchExecutions();
+  }, [fetchExecutions]);
 
-  const COLORS = ['#10b981', '#ef4444'];
+  useEffect(() => {
+    if (!socket) return;
+
+    const onRunning = (event) => {
+      setExecutions((prev) => {
+        const runningEntry = {
+          id: `running-${Date.now()}`,
+          executionId: `running-${Date.now()}`,
+          username: event?.userName || 'Unknown',
+          language: event?.language || 'javascript',
+          status: 'running',
+          executionTime: 0,
+          createdAt: event?.timestamp || new Date().toISOString(),
+          output: '',
+          error: '',
+          logs: '',
+        };
+
+        return [runningEntry, ...prev].slice(0, 200);
+      });
+    };
+
+    const onRecordCreated = (entry) => {
+      if (!entry) return;
+
+      setExecutions((prev) => {
+        const next = prev.filter((item) => {
+          if (item.status !== 'running') return true;
+          const sameUser = String(item.username || '') === String(entry.username || '');
+          const sameLang = String(item.language || '') === String(entry.language || '');
+          return !(sameUser && sameLang);
+        });
+
+        return [entry, ...next].slice(0, 200);
+      });
+    };
+
+    socket.on('code-executing', onRunning);
+    socket.on('execution-record-created', onRecordCreated);
+
+    return () => {
+      socket.off('code-executing', onRunning);
+      socket.off('execution-record-created', onRecordCreated);
+    };
+  }, [socket]);
+
+  const stats = useMemo(() => {
+    const completed = executions.filter((item) => item.status !== 'running');
+    const totalRuns = completed.length;
+    const successfulRuns = completed.filter((item) => item.status === 'success').length;
+    const failedRuns = completed.filter((item) => item.status === 'error' || item.status === 'timeout').length;
+    const runningRuns = executions.filter((item) => item.status === 'running').length;
+    const successRate = totalRuns ? Math.round((successfulRuns / totalRuns) * 100) : 0;
+    const failureRate = totalRuns ? Math.round((failedRuns / totalRuns) * 100) : 0;
+
+    return {
+      totalRuns,
+      successfulRuns,
+      failedRuns,
+      runningRuns,
+      successRate,
+      failureRate,
+    };
+  }, [executions]);
+
+  const userOptions = useMemo(() => {
+    const users = new Set();
+    (allUsersData || []).forEach((item) => users.add(item.userId));
+    executions.forEach((item) => {
+      if (item.userId) users.add(item.userId);
+    });
+
+    return Array.from(users)
+      .map((userId) => {
+        const fromTeam = (allUsersData || []).find((item) => String(item.userId || '') === String(userId));
+        const fromExecution = executions.find((item) => String(item.userId || '') === String(userId));
+        return {
+          id: userId,
+          name: fromTeam?.userName || fromExecution?.username || 'Unknown',
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allUsersData, executions]);
+
+  const languageOptions = useMemo(() => {
+    const set = new Set();
+    executions.forEach((item) => {
+      if (item.language) set.add(item.language);
+    });
+    return Array.from(set).sort();
+  }, [executions]);
+
+  const pieData = useMemo(
+    () => [
+      { name: 'Success', value: stats.successfulRuns },
+      { name: 'Failure', value: stats.failedRuns },
+    ],
+    [stats.failedRuns, stats.successfulRuns]
+  );
+
+  const lineData = useMemo(() => {
+    const buckets = new Map();
+    executions
+      .filter((item) => item.status !== 'running')
+      .forEach((item) => {
+        const timestamp = new Date(item.createdAt).getTime();
+        if (Number.isNaN(timestamp)) return;
+        const bucketMs = 5 * 60 * 1000;
+        const bucketStart = Math.floor(timestamp / bucketMs) * bucketMs;
+        buckets.set(bucketStart, (buckets.get(bucketStart) || 0) + 1);
+      });
+
+    return Array.from(buckets.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, count]) => ({
+        ts,
+        time: new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        count,
+      }))
+      .slice(-18);
+  }, [executions]);
+
+  const openOutput = async (entry) => {
+    const entryId = entry.executionId || entry.id;
+    if (!entryId) return;
+
+    try {
+      setOutputLoading(true);
+      const response = await axios.get(`${API_URL}/executions/${entryId}`, {
+        headers: authStorage.getAuthHeaders(),
+      });
+      setSelectedExecution(response.data?.execution || null);
+    } catch (detailError) {
+      setError(detailError?.response?.data?.error || 'Failed to load execution output');
+    } finally {
+      setOutputLoading(false);
+    }
+  };
+
+  const deleteExecution = async (entry) => {
+    const entryId = entry.executionId || entry.id;
+    if (!entryId) return;
+    if (!window.confirm('Delete this execution record?')) return;
+
+    try {
+      setDeletingExecutionId(String(entryId));
+      await axios.delete(`${API_URL}/executions/${entryId}`, {
+        headers: authStorage.getAuthHeaders(),
+      });
+
+      setExecutions((prev) => prev.filter((item) => String(item.executionId || item.id) !== String(entryId)));
+      if (String(selectedExecution?.executionId || selectedExecution?.id) === String(entryId)) {
+        setSelectedExecution(null);
+      }
+    } catch (deleteError) {
+      setError(deleteError?.response?.data?.error || 'Failed to delete execution record');
+    } finally {
+      setDeletingExecutionId('');
+    }
+  };
+
+  const clearExecutionHistory = async () => {
+    if (!projectId) return;
+    if (!window.confirm('Clear execution history for this project?')) return;
+
+    try {
+      setClearingHistory(true);
+      await axios.delete(`${API_URL}/executions`, {
+        params: { projectId },
+        headers: authStorage.getAuthHeaders(),
+      });
+      setExecutions([]);
+      setSelectedExecution(null);
+    } catch (clearError) {
+      setError(clearError?.response?.data?.error || 'Failed to clear execution history');
+    } finally {
+      setClearingHistory(false);
+    }
+  };
+
+  const isSuccessfulExecution = String(selectedExecution?.status || '').toLowerCase() === 'success';
+  const displayStdout = isSuccessfulExecution
+    ? (selectedExecution?.output || '[empty]')
+    : 'Code have error';
+  const displayStderr = isSuccessfulExecution
+    ? 'No error'
+    : (selectedExecution?.error || selectedExecution?.output || '[empty]');
 
   return (
-    <div className="space-y-4">
-      {data.userName && (
-        <div className="flex items-center gap-2 mb-4">
-          <User className="text-blue-400" size={24} />
-          <h3 className="text-white font-bold text-lg">{data.userName}'s Analytics</h3>
-        </div>
-      )}
-      {!data.userName && <h3 className="text-white font-bold text-lg">Session Analytics</h3>}
+    <div className="space-y-4 text-slate-100">
+      <div className="grid grid-cols-2 gap-3">
+        <StatsCard label="Total Runs" value={stats.totalRuns} accent="text-cyan-300" icon={<PlayCircle size={16} />} />
+        <StatsCard label="Success Rate" value={`${stats.successRate}%`} accent="text-emerald-300" icon={<BarChart3 size={16} />} />
+        <StatsCard label="Failure Rate" value={`${stats.failureRate}%`} accent="text-rose-300" icon={<BarChart3 size={16} />} />
+        <StatsCard label="Running" value={stats.runningRuns} accent="text-amber-300" icon={<PlayCircle size={16} />} />
+      </div>
 
-      {/* Stats Cards */}
-      <div className="space-y-3">
-        <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg hover:border-blue-600 transition-colors">
-          <p className="text-gray-400 text-sm font-medium">Total Runs</p>
-          <p className="text-white text-3xl font-bold mt-2">{data.totalRuns}</p>
-        </div>
-
-        <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg hover:border-green-600 transition-colors">
-          <p className="text-gray-400 text-sm font-medium">Successful Runs</p>
-          <div className="flex items-end justify-between mt-2">
-            <p className="text-green-400 text-3xl font-bold">{data.successfulRuns}</p>
-            <div className="text-right">
-              <p className="text-green-400 text-xl font-bold">{successRate}%</p>
-              <p className="text-gray-500 text-xs">Success Rate</p>
-            </div>
+      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+        <p className="text-xs text-slate-300 mb-2">Recent Team Activity</p>
+        {!!activityFeed.length && (
+          <div className="space-y-1.5 max-h-32 overflow-auto pr-1">
+            {activityFeed.slice(0, 6).map((item, index) => (
+              <div key={`${item.userName}-${item.timestamp}-${index}`} className="flex justify-between items-center text-xs">
+                <span className="text-slate-300">{item.userName || 'Unknown'} ran {item.language || 'code'}</span>
+                <span className={item.status === 'success' ? 'text-emerald-300' : 'text-rose-300'}>
+                  {STATUS_LABELS[item.status] || item.status}
+                </span>
+              </div>
+            ))}
           </div>
-        </div>
+        )}
+        {!activityFeed.length && (
+          <p className="text-xs text-slate-500">No recent activity yet. Run code to see live events here.</p>
+        )}
+      </div>
 
-        <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg hover:border-red-600 transition-colors">
-          <p className="text-gray-400 text-sm font-medium">Failed Runs</p>
-          <div className="flex items-end justify-between mt-2">
-            <p className="text-red-400 text-3xl font-bold">{data.failedRuns}</p>
-            <div className="text-right">
-              <p className="text-red-400 text-xl font-bold">{data.totalErrors}</p>
-              <p className="text-gray-500 text-xs">Total Errors</p>
-            </div>
+      <div className="bg-slate-900/80 border border-slate-700 rounded-xl p-3">
+        <div className="flex items-center gap-2 text-sm text-slate-300 mb-3">
+          <Filter size={14} />
+          Filters & Search
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              value={filters.search}
+              onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))}
+              placeholder="Search execution ID or username"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+            />
           </div>
-        </div>
 
-        <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg hover:border-blue-600 transition-colors">
-          <p className="text-gray-400 text-sm font-medium">Average Execution Time</p>
-          <p className="text-blue-400 text-3xl font-bold mt-2">{avgExecutionTime}ms</p>
-          {data.executionTimes && data.executionTimes.length > 0 && (
-            <p className="text-gray-500 text-xs mt-2">Based on {data.executionTimes.length} executions</p>
-          )}
+          <select
+            value={filters.user}
+            onChange={(event) => setFilters((prev) => ({ ...prev, user: event.target.value }))}
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="">All Users</option>
+            {userOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
+          </select>
+
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={filters.language}
+              onChange={(event) => setFilters((prev) => ({ ...prev, language: event.target.value }))}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+            >
+              <option value="">All Languages</option>
+              {languageOptions.map((language) => (
+                <option key={language} value={language}>
+                  {language}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filters.status}
+              onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+            >
+              <option value="">All Statuses</option>
+              <option value="success">Success</option>
+              <option value="error">Error</option>
+              <option value="timeout">Timeout</option>
+              <option value="running">Running</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* Bar Chart */}
-      {data.totalRuns > 0 && (
-        <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg mt-6">
-          <p className="text-gray-300 text-sm font-medium mb-4">Run Status Distribution</p>
+      <div className="grid grid-cols-1 gap-3">
+        <div className="bg-slate-900/80 border border-slate-700 rounded-xl p-4">
+          <p className="text-xs text-slate-300 mb-4 font-semibold">Success vs Failure</p>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#444" />
-              <XAxis dataKey="name" stroke="#999" />
-              <YAxis stroke="#999" />
-              <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #444', borderRadius: '4px', color: '#fff' }} />
-              <Legend />
-              <Bar dataKey="Successful" fill="#10b981" radius={[8, 8, 0, 0]} />
-              <Bar dataKey="Failed" fill="#ef4444" radius={[8, 8, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Pie Chart */}
-      {data.totalRuns > 0 && (
-        <div className="bg-gray-800 border border-gray-700 p-4 rounded-lg">
-          <p className="text-gray-300 text-sm font-medium mb-4">Success Breakdown</p>
-          <ResponsiveContainer width="100%" height={150}>
             <PieChart>
-              <Pie
-                data={pieData}
-                cx="50%"
-                cy="50%"
-                innerRadius={40}
-                outerRadius={60}
-                paddingAngle={2}
-                dataKey="value"
+              <Pie 
+                data={pieData} 
+                dataKey="value" 
+                cx="50%" 
+                cy="50%" 
+                outerRadius={70}
+                innerRadius={0}
+                label={({ name, value }) => `${name}: ${value}`}
+                labelLine={false}
               >
                 {pieData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
+                  <Cell key={`${entry.name}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #444', borderRadius: '4px', color: '#fff' }} />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #22d3ee', borderRadius: 8, color: '#f8fafc', padding: '8px 12px' }}
+                labelStyle={{ color: '#f8fafc', fontSize: 12, fontWeight: 500 }}
+                itemStyle={{ color: '#f8fafc', fontSize: 12 }}
+                formatter={(value) => [value, 'Count']}
+              />
             </PieChart>
           </ResponsiveContainer>
         </div>
-      )}    </div>
+
+        <div className="bg-slate-900/80 border border-slate-700 rounded-xl p-3">
+          <p className="text-xs text-slate-300 mb-2">Execution Count Over Time</p>
+          <ResponsiveContainer width="100%" height={190}>
+            <AreaChart data={lineData} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="executionCountGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+              <XAxis dataKey="time" stroke="#94a3b8" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} allowDecimals={false} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 10, color: '#f8fafc' }}
+                labelStyle={{ color: '#f8fafc' }}
+                itemStyle={{ color: '#f8fafc' }}
+              />
+              <Area type="monotone" dataKey="count" stroke="#22d3ee" strokeWidth={2.4} fill="url(#executionCountGradient)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="bg-slate-900/80 border border-slate-700 rounded-xl p-3">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <p className="text-sm text-slate-100 font-semibold">Execution History</p>
+          <button
+            onClick={clearExecutionHistory}
+            disabled={clearingHistory || loading || executions.length === 0}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border border-rose-600/50 bg-rose-900/30 text-rose-200 hover:bg-rose-900/50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Trash2 size={13} />
+            {clearingHistory ? 'Clearing...' : 'Clear All'}
+          </button>
+        </div>
+        {loading && <p className="text-xs text-slate-400">Loading execution history...</p>}
+        {error && <p className="text-xs text-rose-300">{error}</p>}
+
+        {!loading && !error && (
+          <div className="space-y-2 max-h-96 overflow-auto pr-1">
+            {executions.map((item) => (
+              <div key={toKey(item)} className="group bg-slate-900/40 border border-slate-700/50 hover:border-slate-600 rounded-lg p-3 transition-all duration-200 hover:bg-slate-900/60">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-slate-100 font-semibold truncate">{item.username}</p>
+                    <p className="text-xs text-slate-500 mt-1">{item.language} • {new Date(item.createdAt).toLocaleTimeString()}</p>
+                  </div>
+                  <span className={`text-[10px] px-2.5 py-1.5 rounded-full border font-medium whitespace-nowrap ${STATUS_COLORS[item.status] || STATUS_COLORS.error}`}>
+                    {STATUS_LABELS[item.status] || item.status}
+                  </span>
+                </div>
+
+                <div className="mt-2 flex items-center gap-4 text-xs text-slate-400 border-t border-slate-700/50 pt-2.5">
+                  <div className="flex items-center gap-1">
+                    <span className="text-slate-500">Exec Time:</span>
+                    <span className="text-slate-200 font-mono">{formatDuration(item.executionTime)}</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between">
+                  <button
+                    onClick={() => openOutput(item)}
+                    disabled={item.status === 'running' || outputLoading}
+                    className="flex-1 px-3 py-1.5 text-xs rounded-md bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors"
+                  >
+                    View Output
+                  </button>
+                  <div className="flex items-center gap-1 ml-2">
+                    <button
+                      onClick={() => deleteExecution(item)}
+                      disabled={deletingExecutionId === String(item.executionId || item.id) || item.status === 'running'}
+                      title={deletingExecutionId === String(item.executionId || item.id) ? 'Deleting...' : 'Delete execution'}
+                      className="p-2 rounded-md text-slate-400 hover:text-rose-400 hover:bg-rose-900/20 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-200"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {!executions.length && <p className="text-xs text-slate-500">No executions found for current filters.</p>}
+          </div>
+        )}
+      </div>
+
+      {selectedExecution && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl bg-slate-950 border border-slate-700 rounded-xl overflow-hidden shadow-2xl">
+            <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-slate-400">Execution #{selectedExecution.executionId || selectedExecution.id}</p>
+                <p className="text-sm font-semibold text-slate-100">
+                  {selectedExecution.username} • {selectedExecution.language}
+                </p>
+              </div>
+              <button onClick={() => setSelectedExecution(null)} className="text-slate-400 hover:text-slate-100">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 max-h-[75vh] overflow-auto">
+              <div className="grid grid-cols-1 gap-3">
+                <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                  <p className="text-[11px] uppercase tracking-widest text-slate-500 mb-1">Files Used</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(selectedExecution.files || []).length > 0 ? (
+                      selectedExecution.files.map((file) => (
+                        <span
+                          key={file.filename}
+                          className="inline-flex items-center rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200"
+                        >
+                          {file.filename}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-slate-500">No execution files recorded</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <TerminalBlock title="Standard Output (stdout)" value={displayStdout} tone="text-emerald-200" />
+              <TerminalBlock title="Error Output (stderr)" value={displayStderr} tone="text-rose-200" />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatsCard({ label, value, accent, icon }) {
+  return (
+    <div className="bg-slate-900/80 border border-slate-700 rounded-xl p-3">
+      <div className="flex items-center justify-between text-xs text-slate-400">
+        <span>{label}</span>
+        <span>{icon}</span>
+      </div>
+      <p className={`mt-2 text-xl font-bold ${accent}`}>{value}</p>
+    </div>
+  );
+}
+
+function TerminalBlock({ title, value, tone }) {
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-widest text-slate-400 mb-2">{title}</p>
+      <pre className={`bg-black border border-slate-800 rounded-lg p-3 text-xs font-mono whitespace-pre-wrap break-words min-h-20 ${tone}`}>
+        {value || '[empty]'}
+      </pre>
+    </div>
   );
 }

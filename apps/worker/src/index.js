@@ -293,6 +293,23 @@ const findEntryFile = (fileList, entryFileName, defaultBaseName) => {
 // Check if a filename ends with a given extension (case-insensitive)
 const hasExt = (fname, ext) => String(fname || '').toLowerCase().endsWith(ext);
 
+const buildExecutionLogs = (result = {}) => {
+  const parts = [];
+  if (result.output) {
+    parts.push(`stdout:\n${result.output}`);
+  }
+  if (result.runtimeError) {
+    parts.push(`stderr:\n${result.runtimeError}`);
+  }
+  if (result.compileError) {
+    parts.push(`compileError:\n${result.compileError}`);
+  }
+  if (result.error && !result.runtimeError && !result.compileError) {
+    parts.push(`error:\n${result.error}`);
+  }
+  return parts.join('\n\n').trim();
+};
+
 const worker = new Worker('code-execution', async (job) => {
   console.log(`Processing job ${job.id}...`);
 
@@ -303,6 +320,7 @@ const worker = new Worker('code-execution', async (job) => {
   const jobTag = `job_${jobId}`;
 
   const tempDir = path.join(EXECUTION_DIR, jobTag);
+  const startedAt = Date.now();
 
   try {
     await fs.mkdir(tempDir, { recursive: true });
@@ -515,12 +533,24 @@ const worker = new Worker('code-execution', async (job) => {
       // C# — compiled with Mono
       // -----------------------------------------------------------------------
       case 'csharp': {
-        const csFile = path.join(tempDir, `${jobTag}.cs`);
-        const exeFile = path.join(tempDir, `${jobTag}.exe`);
-        await fs.writeFile(csFile, code);
+        const csFiles = files.filter((f) => hasExt(f?.name, '.cs'));
+        const exeFile = path.join(tempDir, 'main.exe');
+
+        if (csFiles.length > 0) {
+          await writeExecutionFiles(tempDir, csFiles);
+        } else {
+          const csFile = path.join(tempDir, `${jobTag}.cs`);
+          await fs.writeFile(csFile, code);
+        }
+
+        const sources = csFiles.length > 0
+          ? csFiles
+              .map((file) => `"${path.join(tempDir, sanitizeRelativeFilePath(file.name))}"`)
+              .join(' ')
+          : `"${path.join(tempDir, `${jobTag}.cs`)}"`;
 
         try {
-          await execWithLimits(`csc "${csFile}"`, { cwd: tempDir });
+          await execWithLimits(`csc /out:"${exeFile}" ${sources}`, { cwd: tempDir });
         } catch (compileErr) {
           finalResult = {
             status: 'compile-error',
@@ -555,7 +585,8 @@ const worker = new Worker('code-execution', async (job) => {
       output: finalResult.output || '',
       compileError: finalResult.compileError || null,
       runtimeError: finalResult.runtimeError || null,
-      executionTime: 0,
+      logs: buildExecutionLogs(finalResult),
+      executionTime: Date.now() - startedAt,
       memoryUsed: 0,
     };
 
@@ -571,7 +602,8 @@ const worker = new Worker('code-execution', async (job) => {
       output: '',
       compileError: null,
       runtimeError: error.message || 'Execution failed',
-      executionTime: 0,
+      logs: buildExecutionLogs({ error: error.message || 'Execution failed' }),
+      executionTime: Date.now() - startedAt,
       memoryUsed: 0,
     };
   }

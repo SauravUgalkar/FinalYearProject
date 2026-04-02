@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   GitBranch, GitCommit, Plus, Check, X, RefreshCw, Upload, Download,
   Link2, AlertCircle, CheckCircle2, GitMerge, ChevronDown, ChevronRight,
-  Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine, Files, Users, LogOut
+  Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine, Files, Users, LogOut, Trash2
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config/runtime';
@@ -10,6 +10,11 @@ import { authStorage } from '../services/authStorage';
 
 const API = API_URL;
 const headers = () => authStorage.getAuthHeaders();
+
+const getApiErrorMessage = (error, fallback) => {
+  const message = error?.response?.data?.error || error?.response?.data?.message || error?.message;
+  return message || fallback;
+};
 
 // ── tiny helpers ────────────────────────────────────────────────
 function Badge({ children, color = 'gray' }) {
@@ -77,20 +82,25 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const [commitMessage, setCommitMessage]   = useState('');
   const [pushMessage,   setPushMessage]     = useState('');
   const [remoteUrl,     setRemoteUrl]       = useState('');
+  const [remoteConnected, setRemoteConnected] = useState(false);
 
   const [commitLoading, setCommitLoading] = useState(false);
   const [pushLoading,   setPushLoading]   = useState(false);
   const [pullLoading,   setPullLoading]   = useState(false);
   const [initLoading,   setInitLoading]   = useState(false);
   const [branchLoading, setBranchLoading] = useState(false);
+  const [repoSaving, setRepoSaving] = useState(false);
+  const [repoRemoving, setRepoRemoving] = useState(false);
 
   const [branches,      setBranches]      = useState([]);
   const [newBranchName, setNewBranchName] = useState('');
+  const [syncBranch, setSyncBranch] = useState('');
 
   const [githubLinked, setGithubLinked] = useState(false);
   const [githubUsername, setGithubUsername] = useState('');
   const [commitHistory, setCommitHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [deletingCommitId, setDeletingCommitId] = useState('');
   const [expandedCommits, setExpandedCommits] = useState({});
   const [projectMembers, setProjectMembers] = useState([]);
 
@@ -112,10 +122,14 @@ export default function GitControl({ projectId, onFilesChanged }) {
       if (!silent) setFetching(true);
       const res = await axios.get(`${API}/git/${projectId}/status`, { headers: headers() });
       setStatus(res.data);
-      if (res.data?.remoteUrl) setRemoteUrl(res.data.remoteUrl);
-    } catch {
+      setRemoteUrl(res.data?.remoteUrl || '');
+      setRemoteConnected(Boolean(res.data?.remoteConnected || res.data?.remoteUrl));
+    } catch (error) {
       if (!silent) {
         setStatus({ staged: [], unstaged: [], untracked: [], branch: 'main', commits: [] });
+        setRemoteUrl('');
+        setRemoteConnected(false);
+        showToast('error', getApiErrorMessage(error, 'Failed to load git status.'));
       }
     } finally {
       if (!silent) setFetching(false);
@@ -125,12 +139,23 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const fetchBranches = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/git/${projectId}/branches`, { headers: headers() });
-      setBranches(res.data.branches || []);
-      if (res.data.current) setStatus((p) => ({ ...p, branch: res.data.current }));
-    } catch {
+      const fetchedBranches = res.data.branches || [];
+      setBranches(fetchedBranches);
+      if (res.data.current) {
+        setStatus((p) => ({ ...p, branch: res.data.current }));
+        setSyncBranch((prev) => prev || res.data.current);
+      }
+    } catch (error) {
       setBranches([]);
+      showToast('error', getApiErrorMessage(error, 'Failed to load branches.'));
     }
   }, [projectId]);
+
+  useEffect(() => {
+    if (!syncBranch && status.branch) {
+      setSyncBranch(status.branch);
+    }
+  }, [status.branch, syncBranch]);
 
   const fetchCommitHistory = useCallback(async ({ silent = false } = {}) => {
     try {
@@ -138,8 +163,9 @@ export default function GitControl({ projectId, onFilesChanged }) {
       const res = await axios.get(`${API}/git/${projectId}/commits`, { headers: headers() });
       const commits = Array.isArray(res.data) ? res.data : [];
       setCommitHistory(commits);
-    } catch {
+    } catch (error) {
       if (!silent) setCommitHistory([]);
+      if (!silent) showToast('error', getApiErrorMessage(error, 'Failed to load commit history.'));
     } finally {
       if (!silent) setHistoryLoading(false);
     }
@@ -150,9 +176,10 @@ export default function GitControl({ projectId, onFilesChanged }) {
       const res = await axios.get(`${API}/github/status`, { headers: headers() });
       setGithubLinked(Boolean(res?.data?.linked));
       setGithubUsername(res?.data?.githubUsername || '');
-    } catch {
+    } catch (error) {
       setGithubLinked(false);
       setGithubUsername('');
+      showToast('error', getApiErrorMessage(error, 'Failed to load GitHub connection status.'));
     }
   }, []);
 
@@ -185,8 +212,9 @@ export default function GitControl({ projectId, onFilesChanged }) {
       }, []);
 
       setProjectMembers(deduped);
-    } catch {
+    } catch (error) {
       setProjectMembers([]);
+      showToast('error', getApiErrorMessage(error, 'Failed to load project members.'));
     }
   }, [projectId]);
 
@@ -246,14 +274,20 @@ export default function GitControl({ projectId, onFilesChanged }) {
     try {
       const res = await axios.post(`${API}/git/${projectId}/stage`, { files }, { headers: headers() });
       setStatus(res.data);
-    } catch { fetchGitStatus(); }
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Failed to stage files.'));
+      fetchGitStatus({ silent: true });
+    }
   };
 
   const unstage = async (file) => {
     try {
       const res = await axios.post(`${API}/git/${projectId}/unstage`, { files: [file] }, { headers: headers() });
       setStatus(res.data);
-    } catch { fetchGitStatus(); }
+    } catch (error) {
+      showToast('error', getApiErrorMessage(error, 'Failed to unstage files.'));
+      fetchGitStatus({ silent: true });
+    }
   };
 
   const stageAll = () => {
@@ -287,7 +321,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
   // ── github connect ────────────────────────────────────────────
   const connectGitHub = async () => {
     try {
-      const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const returnTo = `/editor/${projectId}?tab=git`;
       const res  = await fetch(`${API}/github/auth-url?returnTo=${encodeURIComponent(returnTo)}`, { headers: headers() });
       const data = await res.json();
       if (!data.authUrl) return showToast('error', data.error || 'GitHub OAuth not configured.');
@@ -301,7 +335,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
       await axios.post(`${API}/github/disconnect`, {}, { headers: headers() });
       setGithubLinked(false);
       setGithubUsername('');
-      showToast('success', 'GitHub account disconnected.');
+      showToast('success', 'GitHub logged out.');
     } catch (err) {
       showToast('error', err.response?.data?.error || 'Failed to disconnect GitHub account.');
     }
@@ -317,15 +351,86 @@ export default function GitControl({ projectId, onFilesChanged }) {
     }
   };
 
+  const handleConnectRepo = async () => {
+    const trimmed = String(remoteUrl || '').trim();
+    if (!trimmed) {
+      showToast('error', 'Enter a repository URL first.');
+      return;
+    }
+
+    if (!githubLinked) {
+      showToast('error', 'Connect GitHub first');
+      return;
+    }
+
+    setRepoSaving(true);
+    try {
+      const res = await axios.post(`${API}/git/${projectId}/remote`, { remote: trimmed }, { headers: headers() });
+      setRemoteUrl(res.data?.remoteUrl || trimmed);
+      setRemoteConnected(true);
+      showToast('success', 'Repository connected successfully.');
+      fetchBranches();
+      fetchGitStatus({ silent: true });
+    } catch (err) {
+      const serverError = err.response?.data?.error || 'Failed to connect repository.';
+      if (serverError.includes('Repository not found')) {
+        showToast('error', 'Repository does not exist');
+      } else if (serverError.includes('Access denied')) {
+        showToast('error', 'Access denied');
+      } else {
+        showToast('error', serverError);
+      }
+    } finally {
+      setRepoSaving(false);
+    }
+  };
+
+  const handleRemoveRepo = async () => {
+    if (!window.confirm('Remove this repository from the project?')) {
+      return;
+    }
+
+    setRepoRemoving(true);
+    try {
+      await axios.delete(`${API}/git/${projectId}/remote`, { headers: headers() });
+      setRemoteUrl('');
+      setRemoteConnected(false);
+      showToast('success', 'Repository removed successfully.');
+      fetchBranches();
+      fetchGitStatus({ silent: true });
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Failed to remove repository.');
+    } finally {
+      setRepoRemoving(false);
+    }
+  };
+
   // ── init ──────────────────────────────────────────────────────
   const handleInit = async () => {
+    if (!githubLinked) {
+      showToast('error', 'Connect GitHub first');
+      return;
+    }
     setInitLoading(true);
     try {
-      const res = await axios.post(`${API}/git/${projectId}/init`, {}, { headers: headers() });
+      const res = await axios.post(
+        `${API}/git/${projectId}/init`,
+        { remote: remoteUrl || undefined },
+        { headers: headers() }
+      );
       showToast('success', res.data.message || 'Workspace initialised.');
       fetchGitStatus();
     } catch (err) {
-      showToast('error', err.response?.data?.error || 'Init failed.');
+      const serverError = err.response?.data?.error || 'Init failed.';
+      if (serverError.includes('Please connect your GitHub account first')) {
+        showToast('error', 'Connect GitHub first');
+      } else if (serverError.includes('Repository not found')) {
+        showToast('error', 'Repository does not exist');
+      } else if (serverError.includes('Access denied')) {
+        showToast('error', 'Access denied');
+      } else {
+        showToast('error', serverError);
+      }
     } finally { setInitLoading(false); }
   };
 
@@ -334,7 +439,11 @@ export default function GitControl({ projectId, onFilesChanged }) {
     if (!githubLinked) return connectGitHub();
     setPullLoading(true);
     try {
-      const res = await axios.post(`${API}/git/${projectId}/pull`, { remote: remoteUrl || undefined }, { headers: headers() });
+      const res = await axios.post(
+        `${API}/git/${projectId}/pull`,
+        { remote: remoteUrl || undefined, branch: syncBranch || status.branch || undefined },
+        { headers: headers() }
+      );
       showToast('success', res.data.message || 'Pull successful.');
       fetchGitStatus();
       fetchCommitHistory({ silent: true });
@@ -352,15 +461,28 @@ export default function GitControl({ projectId, onFilesChanged }) {
     try {
       const res = await axios.post(
         `${API}/git/${projectId}/push`,
-        { message: pushMessage || 'Update from CollabCode', remote: remoteUrl || undefined },
+        {
+          message: pushMessage || 'Update from CollabCode',
+          remote: remoteUrl || undefined,
+          branch: syncBranch || status.branch || undefined,
+        },
         { headers: headers() }
       );
       showToast('success', res.data.message || 'Push successful.');
       fetchGitStatus();
       fetchCommitHistory({ silent: true });
     } catch (err) {
-      if (err.response?.data?.needsAuth) connectGitHub();
-      else showToast('error', err.response?.data?.error || 'Push failed.');
+      const serverError = err.response?.data?.error || 'Push failed.';
+      if (err.response?.data?.needsAuth || serverError.includes('Please connect your GitHub account first')) {
+        showToast('error', 'Connect GitHub first');
+        connectGitHub();
+      } else if (serverError.includes('Repository not found')) {
+        showToast('error', 'Repository does not exist');
+      } else if (serverError.includes('Access denied')) {
+        showToast('error', 'Access denied');
+      } else {
+        showToast('error', serverError);
+      }
     } finally { setPushLoading(false); }
   };
 
@@ -395,7 +517,32 @@ export default function GitControl({ projectId, onFilesChanged }) {
   const totalChanged  = changedFiles.length;
   const totalStaged   = status.staged?.length || 0;
   const effectiveHistory = commitHistory.length ? commitHistory : (status.commits || []);
+  const sortedHistory = [...effectiveHistory].sort((a, b) => {
+    const aTs = new Date(a?.date || 0).getTime();
+    const bTs = new Date(b?.date || 0).getTime();
+    return bTs - aTs;
+  });
   const remoteShort   = remoteUrl ? remoteUrl.replace('https://github.com/', '') : null;
+
+  const handleDeleteCommit = async (commitId) => {
+    if (!commitId) return;
+    if (!window.confirm('Delete this commit from project history?')) return;
+
+    try {
+      setDeletingCommitId(String(commitId));
+      await axios.delete(`${API}/git/${projectId}/commits/${encodeURIComponent(commitId)}`, { headers: headers() });
+      setCommitHistory((prev) => prev.filter((c) => String(c?.id || '') !== String(commitId)));
+      setStatus((prev) => ({
+        ...prev,
+        commits: (prev?.commits || []).filter((c) => String(c?.id || '') !== String(commitId)),
+      }));
+      showToast('success', 'Commit history entry deleted.');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Failed to delete commit entry.');
+    } finally {
+      setDeletingCommitId('');
+    }
+  };
 
   // ── loading skeleton ─────────────────────────────────────────
   if (fetching) {
@@ -432,7 +579,7 @@ export default function GitControl({ projectId, onFilesChanged }) {
             </button>
           )}
           <button
-            onClick={() => { fetchGitStatus(); fetchBranches(); fetchCommitHistory(); fetchProjectMembers(); }}
+            onClick={() => { fetchGitStatus(); fetchBranches(); fetchCommitHistory(); fetchProjectMembers(); fetchGithubStatus(); }}
             className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
             title="Refresh"
           >
@@ -451,6 +598,9 @@ export default function GitControl({ projectId, onFilesChanged }) {
             <Link2 size={10} /> {remoteShort}
           </Badge>
         )}
+        <Badge color={remoteConnected ? 'green' : 'yellow'}>
+          {remoteConnected ? 'Repo connected' : 'Repo not connected'}
+        </Badge>
         {totalChanged > 0 && (
           <Badge color="yellow">
             {totalChanged} changed
@@ -535,13 +685,34 @@ export default function GitControl({ projectId, onFilesChanged }) {
                   placeholder="https://github.com/username/repo.git"
                   className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition"
                 />
-                <p className="text-[11px] text-gray-600">Set once — saved automatically after first push.</p>
+                {!remoteConnected && (
+                  <p className="text-[11px] text-yellow-300">No repo connected. Add a repository URL.</p>
+                )}
+                {remoteConnected && (
+                  <p className="text-[11px] text-green-300">Repository connected. You can switch to another repo anytime.</p>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleConnectRepo}
+                    disabled={repoSaving || !remoteUrl.trim() || !githubLinked}
+                    className="flex-1 px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium border border-blue-600 disabled:border-gray-700 transition"
+                  >
+                    {repoSaving ? 'Saving…' : (remoteConnected ? 'Update Repo' : 'Add Repo')}
+                  </button>
+                  <button
+                    onClick={handleRemoveRepo}
+                    disabled={repoRemoving || !remoteConnected}
+                    className="px-3 py-2 rounded-lg bg-red-900/70 hover:bg-red-800 disabled:bg-gray-800 disabled:text-gray-600 text-red-100 text-xs font-medium border border-red-700 disabled:border-gray-700 transition"
+                  >
+                    {repoRemoving ? 'Removing…' : 'Remove Repo'}
+                  </button>
+                </div>
               </div>
 
               {/* Init */}
               <button
                 onClick={handleInit}
-                disabled={initLoading}
+                disabled={initLoading || !githubLinked}
                 className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-200 text-sm border border-gray-700 transition"
               >
                 <Terminal size={13} />
@@ -691,6 +862,21 @@ export default function GitControl({ projectId, onFilesChanged }) {
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">
+                  Sync Branch
+                </label>
+                <select
+                  value={syncBranch || status.branch || ''}
+                  onChange={(e) => setSyncBranch(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition"
+                >
+                  {[...new Set([status.branch, ...branches].filter(Boolean))].map((branchName) => (
+                    <option key={branchName} value={branchName}>{branchName}</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Pull */}
               <button
                 onClick={handlePull}
@@ -824,32 +1010,42 @@ export default function GitControl({ projectId, onFilesChanged }) {
                 {!historyLoading && effectiveHistory.length === 0 && (
                   <div className="text-xs text-gray-500 px-2 py-1">No commits yet.</div>
                 )}
-                {effectiveHistory.slice(0, 20).map((c, idx) => {
+                {sortedHistory.slice(0, 20).map((c, idx) => {
                   const commitId = c.id || `${idx}`;
                   const isOpen = Boolean(expandedCommits[commitId]);
                   const files = Array.isArray(c.files) ? c.files : [];
                   return (
                     <div key={commitId} className="rounded-lg border border-gray-800 bg-black/60 overflow-hidden">
-                      <button
-                        onClick={() => setExpandedCommits((prev) => ({ ...prev, [commitId]: !isOpen }))}
-                        className="w-full flex gap-3 px-2.5 py-2.5 hover:bg-gray-400/60 transition text-left"
-                      >
-                        <div className="flex flex-col items-center pt-1">
-                          <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs text-white truncate font-medium">{c.message || 'No message'}</p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
-                            <span className="inline-flex items-center gap-1"><Clock size={9} /> {relativeTime(c.date)}</span>
-                            <span>{c.date ? new Date(c.date).toLocaleString() : 'Unknown date'}</span>
-                            <Badge color="gray">{c.authorName || 'Unknown User'}</Badge>
-                            <Badge color="blue"><GitBranch size={10} /> {c.branch || status.branch || 'main'}</Badge>
-                            {c.id && <span className="font-mono text-gray-500">{c.id.slice(0, 7)}</span>}
-                            <span className="inline-flex items-center gap-1 text-teal-300"><Files size={10} /> {files.length} files</span>
+                      <div className="w-full flex gap-2 px-2.5 py-2.5 hover:bg-gray-400/60 transition text-left">
+                        <button
+                          onClick={() => setExpandedCommits((prev) => ({ ...prev, [commitId]: !isOpen }))}
+                          className="flex flex-1 gap-3 text-left"
+                        >
+                          <div className="flex flex-col items-center pt-1">
+                            <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
                           </div>
-                        </div>
-                        {isOpen ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
-                      </button>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-white truncate font-medium">{c.message || 'No message'}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
+                              <span className="inline-flex items-center gap-1"><Clock size={9} /> {relativeTime(c.date)}</span>
+                              <span>{c.date ? new Date(c.date).toLocaleString() : 'Unknown date'}</span>
+                              <Badge color="gray">{c.authorName || 'Unknown User'}</Badge>
+                              <Badge color="blue"><GitBranch size={10} /> {c.branch || status.branch || 'main'}</Badge>
+                              {c.id && <span className="font-mono text-gray-500">{c.id.slice(0, 7)}</span>}
+                              <span className="inline-flex items-center gap-1 text-teal-300"><Files size={10} /> {files.length} files</span>
+                            </div>
+                          </div>
+                          {isOpen ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCommit(commitId)}
+                          disabled={deletingCommitId === String(commitId)}
+                          className="p-1.5 rounded text-gray-400 hover:text-rose-400 hover:bg-rose-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={deletingCommitId === String(commitId) ? 'Deleting...' : 'Delete commit entry'}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                       {isOpen && (
                         <div className="px-3 pb-3 pt-1 border-t border-gray-800 bg-gray-900/40 space-y-1.5">
                           <p className="text-[11px] uppercase tracking-wider text-gray-500">Changed files</p>

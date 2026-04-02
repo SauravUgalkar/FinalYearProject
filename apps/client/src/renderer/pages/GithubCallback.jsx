@@ -11,7 +11,7 @@ export default function GithubCallback() {
     const error = params.get('githubError') || params.get('error');
 
     if (linked) {
-      setStatus('GitHub connected successfully ✅');
+      setStatus('GitHub Linked successfully ✅');
       setTimeout(() => navigate('/dashboard'), 1200);
       return;
     }

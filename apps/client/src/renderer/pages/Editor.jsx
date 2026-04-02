@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import * as Y from 'yjs';
 import { useSocket } from '../hooks/useSocket';
@@ -21,6 +21,7 @@ import { authStorage } from '../services/authStorage';
 export default function EditorPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { socket } = useSocket();
   const [files, setFiles] = useState([]);
   const [currentFile, setCurrentFile] = useState(null);
@@ -93,6 +94,15 @@ export default function EditorPage() {
 
   const sanitizeName = useCallback((rawPath) => String(rawPath || '').trim(), []);
   const normalizePath = useCallback((rawPath) => String(rawPath || '').trim().replace(/\/+$/, ''), []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tab = (params.get('tab') || '').toLowerCase();
+    const allowedTabs = new Set(['files', 'chat', 'analytics', 'export', 'git', 'settings']);
+    if (allowedTabs.has(tab) && tab !== sidebarTab) {
+      setSidebarTab(tab);
+    }
+  }, [location.search, sidebarTab]);
 
   // Keep filesRef in sync with files state so timers/closures never hold stale data
   useEffect(() => {
@@ -2024,7 +2034,13 @@ export default function EditorPage() {
             )}
             {sidebarTab === 'analytics' && (
               <div className="flex-1 overflow-auto p-4">
-                <Analytics data={analytics} allUsersData={allUsersAnalytics} activityFeed={activityFeed} />
+                <Analytics
+                  projectId={projectId}
+                  socket={socket}
+                  data={analytics}
+                  allUsersData={allUsersAnalytics}
+                  activityFeed={activityFeed}
+                />
               </div>
             )}
             {sidebarTab === 'export' && (
