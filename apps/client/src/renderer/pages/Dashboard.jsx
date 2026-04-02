@@ -39,9 +39,18 @@ export default function Dashboard() {
     setShowLogoutModal(true);
   };
 
-  const confirmLogout = () => {
+  const confirmLogout = async () => {
     // Disconnect socket before logout
     disconnectSocket();
+
+    const token = authStorage.getToken();
+    if (token) {
+      try {
+        await axios.post(`${API_URL}/auth/logout`, {}, { headers: authStorage.getAuthHeaders() });
+      } catch (error) {
+        console.warn('Server logout failed, continuing local logout:', error?.response?.data?.error || error.message);
+      }
+    }
     
     // Clear all session data
     authStorage.clearToken();

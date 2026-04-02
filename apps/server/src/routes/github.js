@@ -17,23 +17,69 @@ const {
 const execFileAsync = promisify(execFile);
 const IMPORT_TMP = '/tmp/github-imports';
 
-const buildFrontendCallbackUrl = () => {
+const getClientOrigin = () => {
   const explicit = process.env.CLIENT_GITHUB_CALLBACK_URL;
-  if (explicit) return explicit;
+  if (explicit) {
+    try {
+      return new URL(explicit).origin;
+    } catch {
+      return explicit;
+    }
+  }
 
   const corsOrigin = (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',')[0].trim();
-  return `${corsOrigin}/github/callback`;
+  return corsOrigin;
+};
+
+const sanitizeReturnTo = (raw) => {
+  const fallback = '/dashboard';
+  const input = String(raw || '').trim();
+  if (!input) return fallback;
+
+  if (input.startsWith('/') && !input.startsWith('//')) {
+    return input;
+  }
+
+  try {
+    const candidate = new URL(input);
+    const clientOrigin = getClientOrigin();
+    if (candidate.origin === clientOrigin) {
+      return `${candidate.pathname}${candidate.search}${candidate.hash}`;
+    }
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+};
+
+const buildClientReturnUrl = ({ returnTo, linked, error }) => {
+  const origin = getClientOrigin();
+  const safeReturnTo = sanitizeReturnTo(returnTo);
+  const url = new URL(`${origin}${safeReturnTo}`);
+  url.searchParams.set('githubLinked', linked ? '1' : '0');
+  if (error) {
+    url.searchParams.set('githubError', error);
+  } else {
+    url.searchParams.delete('githubError');
+  }
+  return url.toString();
+};
+
+const buildFrontendCallbackUrl = () => {
+  return `${getClientOrigin()}/github/callback`;
 };
 
 const buildOAuthCallbackUrl = () => {
   return process.env.GITHUB_REDIRECT_URI || 'http://localhost:5000/api/github/oauth/callback';
 };
 
-const buildOAuthState = (userId) => {
+const buildOAuthState = (userId, returnTo = '/dashboard') => {
   return jwt.sign(
     {
       userId,
       purpose: 'github-link',
+      returnTo: sanitizeReturnTo(returnTo),
     },
     process.env.JWT_SECRET || 'your_secret_key',
     { expiresIn: '10m' }
@@ -50,7 +96,11 @@ const buildAuthUrl = (state) => {
     scope: 'repo,user',
     state,
     allow_signup: 'true',
+    prompt: 'login',
   });
+
+  // `prompt=login` can be ignored by some GitHub flows; force_verify helps force account challenge.
+  params.set('force_verify', 'true');
 
   return `https://github.com/login/oauth/authorize?${params.toString()}`;
 };
@@ -113,41 +163,57 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+const readOAuthState = (stateToken) => {
+  if (!stateToken) return null;
+  try {
+    return jwt.verify(stateToken, process.env.JWT_SECRET || 'your_secret_key');
+  } catch {
+    return null;
+  }
+};
+
 // Get GitHub authorization URL
 router.get('/auth-url', verifyToken, (req, res) => {
   if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
     return res.status(400).json({ error: 'GitHub OAuth not configured' });
   }
 
-  const state = buildOAuthState(req.userId);
+  const state = buildOAuthState(req.userId, req.query.returnTo);
   const authUrl = buildAuthUrl(state);
   res.json({ authUrl });
 });
 
-router.get('/oauth/callback',
-  passport.authenticate('github', { session: false, failureRedirect: `${buildFrontendCallbackUrl()}?linked=0&error=oauth_failed` }),
-  async (req, res) => {
-  try {
-    const payload = req.user;
-    const appUserId = payload?.appUserId;
-    const accessToken = payload?.accessToken;
-    const profile = payload?.githubProfile;
+router.get('/oauth/callback', (req, res, next) => {
+  passport.authenticate('github', { session: false }, async (error, payload) => {
+    const statePayload = readOAuthState(req.query?.state);
+    const returnTo = statePayload?.returnTo;
 
-    if (!appUserId || !accessToken) {
-      return res.redirect(`${buildFrontendCallbackUrl()}?linked=0&error=invalid_callback`);
+    if (error || !payload) {
+      return res.redirect(buildClientReturnUrl({ returnTo, linked: false, error: 'oauth_failed' }));
     }
 
-    await saveGithubTokenForUser({
-      userId: appUserId,
-      accessToken,
-      githubId: profile?.id,
-      githubUsername: profile?.username || profile?.displayName || '',
-    });
+    try {
+      const appUserId = payload?.appUserId;
+      const accessToken = payload?.accessToken;
+      const profile = payload?.githubProfile;
+      const resolvedReturnTo = payload?.returnTo || returnTo;
 
-    return res.redirect(`${buildFrontendCallbackUrl()}?linked=1`);
-  } catch (error) {
-    return res.redirect(`${buildFrontendCallbackUrl()}?linked=0&error=token_save_failed`);
-  }
+      if (!appUserId || !accessToken) {
+        return res.redirect(buildClientReturnUrl({ returnTo: resolvedReturnTo, linked: false, error: 'invalid_callback' }));
+      }
+
+      await saveGithubTokenForUser({
+        userId: appUserId,
+        accessToken,
+        githubId: profile?.id,
+        githubUsername: profile?.username || profile?.displayName || '',
+      });
+
+      return res.redirect(buildClientReturnUrl({ returnTo: resolvedReturnTo, linked: true }));
+    } catch {
+      return res.redirect(buildClientReturnUrl({ returnTo, linked: false, error: 'token_save_failed' }));
+    }
+  })(req, res, next);
 });
 
 router.get('/status', verifyToken, async (req, res) => {
@@ -182,7 +248,7 @@ router.post('/export/:projectId', verifyToken, async (req, res) => {
     const user = await User.findById(req.userId).lean();
     const githubToken = getUserGithubToken(user);
     if (!githubToken) {
-      const authUrl = buildAuthUrl(buildOAuthState(req.userId));
+      const authUrl = buildAuthUrl(buildOAuthState(req.userId, req.body?.returnTo));
       return res.status(428).json({
         error: 'GitHub not linked',
         needsAuth: true,

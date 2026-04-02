@@ -38,6 +38,7 @@ const configurePassport = () => {
           appUserId: statePayload.userId,
           accessToken,
           githubProfile: profile,
+          returnTo: statePayload.returnTo,
         });
       } catch (error) {
         return done(error);

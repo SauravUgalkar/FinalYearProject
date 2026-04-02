@@ -198,4 +198,38 @@ router.put('/profile', verifyToken, async (req, res) => {
   }
 });
 
+// Logout current user and clear app-side OAuth link data
+router.post('/logout', verifyToken, async (req, res) => {
+  try {
+    await User.findByIdAndUpdate(req.userId, {
+      $unset: {
+        githubAccessToken: 1,
+        githubTokenCiphertext: 1,
+        githubTokenIv: 1,
+        githubTokenTag: 1,
+        githubTokenUpdatedAt: 1,
+        githubId: 1,
+        githubUsername: 1,
+      },
+      $set: { updatedAt: new Date() },
+    });
+
+    if (typeof req.logout === 'function') {
+      req.logout(() => {});
+    }
+
+    if (req.session) {
+      req.session.destroy(() => {});
+    }
+
+    const secure = process.env.NODE_ENV === 'production';
+    res.clearCookie('connect.sid', { httpOnly: true, sameSite: 'strict', secure, path: '/' });
+    res.clearCookie('token', { httpOnly: true, sameSite: 'strict', secure, path: '/' });
+
+    return res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

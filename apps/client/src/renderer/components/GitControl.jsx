@@ -194,15 +194,23 @@ export default function GitControl({ projectId, onFilesChanged }) {
   useEffect(() => { fetchGithubStatus(); }, [fetchGithubStatus]);
 
   useEffect(() => {
-    const onMessage = (event) => {
-      if (event?.data?.type === 'GITHUB_CONNECTED') {
-        fetchGithubStatus();
-        showToast('success', 'GitHub connected successfully.');
-      }
-    };
+    const params = new URLSearchParams(window.location.search);
+    const linked = params.get('githubLinked');
+    const error = params.get('githubError');
 
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    if (linked === '1') {
+      showToast('success', 'GitHub connected successfully.');
+      fetchGithubStatus();
+    } else if (linked === '0') {
+      showToast('error', error ? `GitHub connection failed: ${error}` : 'GitHub connection failed.');
+    }
+
+    if (params.has('githubLinked') || params.has('githubError')) {
+      params.delete('githubLinked');
+      params.delete('githubError');
+      const clean = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
+      window.history.replaceState({}, '', clean);
+    }
   }, [fetchGithubStatus]);
 
   // Keep status fresh so Stage & Commit detects new/edited files quickly.
@@ -266,21 +274,12 @@ export default function GitControl({ projectId, onFilesChanged }) {
   // ── github connect ────────────────────────────────────────────
   const connectGitHub = async () => {
     try {
-      const res  = await fetch(`${API}/github/auth-url`, { headers: headers() });
+      const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const res  = await fetch(`${API}/github/auth-url?returnTo=${encodeURIComponent(returnTo)}`, { headers: headers() });
       const data = await res.json();
       if (!data.authUrl) return showToast('error', data.error || 'GitHub OAuth not configured.');
 
-      const w = 600, h = 700;
-      const popup = window.open(
-        data.authUrl, 'GitHub',
-        `width=${w},height=${h},left=${(window.screen.width - w) / 2},top=${(window.screen.height - h) / 2}`
-      );
-      const poll = setInterval(() => {
-        if (popup && popup.closed) {
-          clearInterval(poll);
-          fetchGithubStatus();
-        }
-      }, 500);
+      window.location.assign(data.authUrl);
     } catch { showToast('error', 'Could not start GitHub login.'); }
   };
 

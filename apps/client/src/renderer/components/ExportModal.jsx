@@ -109,27 +109,18 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`
         },
-        body: JSON.stringify({ repositoryName: repoName })
+        body: JSON.stringify({
+          repositoryName: repoName,
+          returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        })
       });
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
-        // If needs GitHub auth, start OAuth flow and retry automatically
+        // Redirect to OAuth in same tab and return to this page.
         if (error.needsAuth && error.authUrl) {
-          await startGithubLoginWithAuth(error.authUrl);
-          // Retry export after linking
-          response = await fetch(`${API_URL}/github/export/${projectId}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${authToken}`
-            },
-            body: JSON.stringify({ repositoryName: repoName })
-          });
-          if (!response.ok) {
-            const retryErr = await response.json().catch(() => ({}));
-            throw new Error(retryErr.error || 'GitHub export failed after linking');
-          }
+          window.location.assign(error.authUrl);
+          return;
         } else {
           throw new Error(error.error || 'GitHub export failed');
         }
@@ -152,36 +143,11 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
   const startGithubLogin = async () => {
     try {
       setAuthLoading(true);
-      const res = await fetch(`${API_URL}/github/auth-url`, { headers: authStorage.getAuthHeaders() });
+      const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const res = await fetch(`${API_URL}/github/auth-url?returnTo=${encodeURIComponent(returnTo)}`, { headers: authStorage.getAuthHeaders() });
       const data = await res.json();
       if (data.authUrl) {
-        // Open GitHub OAuth in a popup window
-        const width = 600;
-        const height = 700;
-        const left = window.screen.width / 2 - width / 2;
-        const top = window.screen.height / 2 - height / 2;
-        const popup = window.open(
-          data.authUrl,
-          'GitHub Login',
-          `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
-        );
-
-        // Poll for the popup to close and check for token
-        const pollTimer = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(pollTimer);
-            setAuthLoading(false);
-            fetch(`${API_URL}/github/status`, { headers: authStorage.getAuthHeaders() })
-              .then((r) => r.json())
-              .then((status) => {
-                if (status?.linked) {
-                  setGithubLinked(true);
-                  alert('GitHub connected successfully!');
-                }
-              })
-              .catch(() => {});
-          }
-        }, 500);
+        window.location.assign(data.authUrl);
       } else {
         alert(data.error || 'GitHub OAuth not configured');
         setAuthLoading(false);
@@ -191,38 +157,6 @@ export default function ExportModal({ isOpen, onClose, projectId, files, project
       alert('Failed to start GitHub login');
       setAuthLoading(false);
     }
-  };
-
-  // Start GitHub OAuth with provided authUrl and attach Authorization header for token persistence
-  const startGithubLoginWithAuth = async (authUrl) => {
-    return new Promise((resolve) => {
-      const width = 600;
-      const height = 700;
-      const left = window.screen.width / 2 - width / 2;
-      const top = window.screen.height / 2 - height / 2;
-      const popup = window.open(
-        authUrl,
-        'GitHub Login',
-        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
-      );
-
-      const pollTimer = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(pollTimer);
-          fetch(`${API_URL}/github/status`, { headers: authStorage.getAuthHeaders() })
-            .then((r) => r.json())
-            .then((status) => {
-              if (status?.linked) {
-                setGithubLinked(true);
-                resolve(true);
-              } else {
-                resolve(false);
-              }
-            })
-            .catch(() => resolve(false));
-        }
-      }, 500);
-    });
   };
 
   if (!isOpen) return null;

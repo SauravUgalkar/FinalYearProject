@@ -215,14 +215,47 @@ router.delete('/:projectId/files', verifyToken, async (req, res) => {
     }
 
     const targetPath = rawTargetPath.replace(/\/+$/, '');
-    const nextFiles = (project.files || []).filter((f) => String(f.name || '').trim() !== targetPath);
+    const applyDelete = (currentProject) => {
+      const nextFiles = (currentProject.files || []).filter((f) => String(f.name || '').trim() !== targetPath);
+      currentProject.files = nextFiles;
+      currentProject.updatedAt = new Date();
+      return nextFiles;
+    };
 
-    project.files = nextFiles;
-    project.updatedAt = new Date();
-    await project.save();
+    let nextFiles = applyDelete(project);
+    try {
+      await project.save();
+    } catch (saveError) {
+      const msg = String(saveError?.message || '');
+      const transient = msg.includes('VersionError') || msg.includes('No matching document found');
+      if (!transient) {
+        throw saveError;
+      }
 
-    return res.json({ success: true, deletedPath: targetPath, deletedType: 'file', files: project.files });
+      const freshProject = await Project.findById(req.params.projectId);
+      if (!freshProject) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      nextFiles = applyDelete(freshProject);
+      try {
+        await freshProject.save();
+      } catch (retryError) {
+        const retryMsg = String(retryError?.message || '');
+        const retryTransient = retryMsg.includes('VersionError') || retryMsg.includes('No matching document found');
+        if (retryTransient) {
+          return res.json({ success: false, skipped: true, reason: 'Concurrent update conflict' });
+        }
+        throw retryError;
+      }
+    }
+
+    return res.json({ success: true, deletedPath: targetPath, deletedType: 'file', files: nextFiles });
   } catch (error) {
+    const msg = String(error?.message || '');
+    if (msg.includes('VersionError') || msg.includes('No matching document found')) {
+      return res.json({ success: false, skipped: true, reason: 'Concurrent update conflict' });
+    }
     return res.status(500).json({ error: error.message });
   }
 });
@@ -245,17 +278,51 @@ router.delete('/:projectId/folders', verifyToken, async (req, res) => {
 
     const folderPath = rawTargetPath.replace(/\/+$/, '');
     const folderPrefix = `${folderPath}/`;
-    const nextFiles = (project.files || []).filter((f) => {
-      const name = String(f.name || '').trim();
-      return name !== folderPath && name !== folderPrefix && !name.startsWith(folderPrefix);
-    });
+    const applyDelete = (currentProject) => {
+      const nextFiles = (currentProject.files || []).filter((f) => {
+        const name = String(f.name || '').trim();
+        return name !== folderPath && name !== folderPrefix && !name.startsWith(folderPrefix);
+      });
 
-    project.files = nextFiles;
-    project.updatedAt = new Date();
-    await project.save();
+      currentProject.files = nextFiles;
+      currentProject.updatedAt = new Date();
+      return nextFiles;
+    };
 
-    return res.json({ success: true, deletedPath: folderPath, deletedType: 'folder', files: project.files });
+    let nextFiles = applyDelete(project);
+    try {
+      await project.save();
+    } catch (saveError) {
+      const msg = String(saveError?.message || '');
+      const transient = msg.includes('VersionError') || msg.includes('No matching document found');
+      if (!transient) {
+        throw saveError;
+      }
+
+      const freshProject = await Project.findById(req.params.projectId);
+      if (!freshProject) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      nextFiles = applyDelete(freshProject);
+      try {
+        await freshProject.save();
+      } catch (retryError) {
+        const retryMsg = String(retryError?.message || '');
+        const retryTransient = retryMsg.includes('VersionError') || retryMsg.includes('No matching document found');
+        if (retryTransient) {
+          return res.json({ success: false, skipped: true, reason: 'Concurrent update conflict' });
+        }
+        throw retryError;
+      }
+    }
+
+    return res.json({ success: true, deletedPath: folderPath, deletedType: 'folder', files: nextFiles });
   } catch (error) {
+    const msg = String(error?.message || '');
+    if (msg.includes('VersionError') || msg.includes('No matching document found')) {
+      return res.json({ success: false, skipped: true, reason: 'Concurrent update conflict' });
+    }
     return res.status(500).json({ error: error.message });
   }
 });

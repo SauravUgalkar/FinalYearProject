@@ -50,18 +50,11 @@ export default function ImportRepoModal({ isOpen, onClose, onImported }) {
 
   const connectGitHub = async () => {
     try {
-      const res = await fetch(`${API}/github/auth-url`, { headers: authStorage.getAuthHeaders() });
+      const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const res = await fetch(`${API}/github/auth-url?returnTo=${encodeURIComponent(returnTo)}`, { headers: authStorage.getAuthHeaders() });
       const data = await res.json();
       if (!data.authUrl) return setError(data.error || 'GitHub OAuth not configured');
-      const w = 600, h = 700;
-      const popup = window.open(data.authUrl, 'GitHub', `width=${w},height=${h},left=${(screen.width - w) / 2},top=${(screen.height - h) / 2}`);
-      const poll = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(poll);
-          setNeedsAuth(false);
-          fetchRepos();
-        }
-      }, 500);
+      window.location.assign(data.authUrl);
     } catch {
       setError('Failed to start GitHub login');
     }

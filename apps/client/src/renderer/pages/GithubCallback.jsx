@@ -7,17 +7,12 @@ export default function GithubCallback() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const linked = params.get('linked') === '1';
-    const error = params.get('error');
+    const linked = params.get('githubLinked') === '1' || params.get('linked') === '1';
+    const error = params.get('githubError') || params.get('error');
 
     if (linked) {
       setStatus('GitHub connected successfully.');
-      if (window.opener) {
-        window.opener.postMessage({ type: 'GITHUB_CONNECTED' }, '*');
-        setTimeout(() => window.close(), 600);
-      } else {
-        setTimeout(() => navigate('/dashboard'), 1200);
-      }
+      setTimeout(() => navigate('/dashboard'), 1200);
       return;
     }
 
