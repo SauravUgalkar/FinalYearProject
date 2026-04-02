@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   GitBranch, GitCommit, Plus, Check, X, RefreshCw, Upload, Download,
   Link2, AlertCircle, CheckCircle2, GitMerge, ChevronDown, ChevronRight,
-  Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine, Files, Users
+  Terminal, Clock, Wifi, WifiOff, FolderGit2, ArrowUpFromLine, ArrowDownToLine, Files, Users, LogOut
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config/runtime';
@@ -198,11 +198,19 @@ export default function GitControl({ projectId, onFilesChanged }) {
     const linked = params.get('githubLinked');
     const error = params.get('githubError');
 
+    const githubErrorMessage = (code) => {
+      if (!code) return 'GitHub authentication failed.';
+      if (code === 'oauth_failed') return 'GitHub authentication failed.';
+      if (code === 'invalid_callback') return 'GitHub authentication failed.';
+      if (code === 'token_save_failed') return 'GitHub authentication failed.';
+      return 'GitHub authentication failed.';
+    };
+
     if (linked === '1') {
       showToast('success', 'GitHub connected successfully.');
       fetchGithubStatus();
     } else if (linked === '0') {
-      showToast('error', error ? `GitHub connection failed: ${error}` : 'GitHub connection failed.');
+      showToast('error', `${githubErrorMessage(error)} ❌`);
     }
 
     if (params.has('githubLinked') || params.has('githubError')) {
@@ -281,6 +289,16 @@ export default function GitControl({ projectId, onFilesChanged }) {
 
       window.location.assign(data.authUrl);
     } catch { showToast('error', 'Could not start GitHub login.'); }
+  };
+
+  const disconnectGitHub = async () => {
+    try {
+      await axios.post(`${API}/github/disconnect`, {}, { headers: headers() });
+      setGithubLinked(false);
+      showToast('success', 'GitHub account disconnected.');
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'Failed to disconnect GitHub account.');
+    }
   };
 
   // ── init ──────────────────────────────────────────────────────
@@ -388,6 +406,15 @@ export default function GitControl({ projectId, onFilesChanged }) {
             ? <Wifi size={13} className="text-green-400" title="GitHub connected" />
             : <WifiOff size={13} className="text-gray-500" title="Not connected" />
           }
+          {githubLinked && (
+            <button
+              onClick={disconnectGitHub}
+              className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-red-300 transition-colors"
+              title="Disconnect GitHub"
+            >
+              <LogOut size={13} />
+            </button>
+          )}
           <button
             onClick={() => { fetchGitStatus(); fetchBranches(); fetchCommitHistory(); fetchProjectMembers(); }}
             className="p-1.5 rounded-md hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"

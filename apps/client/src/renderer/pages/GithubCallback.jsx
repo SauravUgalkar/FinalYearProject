@@ -11,12 +11,12 @@ export default function GithubCallback() {
     const error = params.get('githubError') || params.get('error');
 
     if (linked) {
-      setStatus('GitHub connected successfully.');
+      setStatus('GitHub connected successfully ✅');
       setTimeout(() => navigate('/dashboard'), 1200);
       return;
     }
 
-    setStatus(error ? `GitHub sign-in failed: ${error}` : 'GitHub sign-in failed.');
+    setStatus(error ? 'GitHub authentication failed ❌' : 'GitHub authentication failed ❌');
   }, [navigate]);
 
   return (

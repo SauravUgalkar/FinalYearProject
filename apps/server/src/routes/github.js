@@ -95,7 +95,7 @@ const buildAuthUrl = (state) => {
     redirect_uri: buildOAuthCallbackUrl(),
     scope: 'repo,user',
     state,
-    allow_signup: 'true',
+    allow_signup: 'false',
     prompt: 'login',
   });
 
@@ -227,6 +227,27 @@ router.get('/status', verifyToken, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/disconnect', verifyToken, async (req, res) => {
+  try {
+    await User.findByIdAndUpdate(req.userId, {
+      $unset: {
+        githubAccessToken: 1,
+        githubTokenCiphertext: 1,
+        githubTokenIv: 1,
+        githubTokenTag: 1,
+        githubTokenUpdatedAt: 1,
+        githubId: 1,
+        githubUsername: 1,
+      },
+      $set: { updatedAt: new Date() },
+    });
+
+    return res.json({ message: 'GitHub disconnected successfully' });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
