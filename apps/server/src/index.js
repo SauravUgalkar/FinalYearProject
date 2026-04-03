@@ -82,16 +82,9 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
-// Parse CORS origins from environment variable
-const corsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
-  : ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"];
-
-console.log("CORS Origins:", corsOrigins);
-
 const io = new Server(server, {
   cors: {
-    origin: corsOrigins,
+    origin: true,
     credentials: true,
     methods: ["GET", "POST"],
   },
@@ -115,7 +108,7 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    origin: corsOrigins,
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -138,7 +131,16 @@ app.use((req, res, next) => {
 });
 
 // Explicitly handle preflight requests
-app.options("*", cors());
+app.options(
+  "*",
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 200,
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

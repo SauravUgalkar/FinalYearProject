@@ -27,8 +27,7 @@ const getClientOrigin = () => {
     }
   }
 
-  const corsOrigin = (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',')[0].trim();
-  return corsOrigin;
+  return 'http://localhost:3000';
 };
 
 const sanitizeReturnTo = (raw) => {
