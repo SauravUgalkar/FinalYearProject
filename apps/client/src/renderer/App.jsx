@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import './App.css';
+import { ThemeProvider } from './context/ThemeContext';
 
 // Pages
 import Login from './pages/Login';
@@ -88,57 +89,59 @@ function App() {
   }
 
   return (
-    <Router>
-      <Routes>
-        <Route
-          path="/"
-          element={<LandingPage />}
-        />
-        <Route
-          path="/login"
-          element={<Login />}
-        />
-        <Route
-          path="/register"
-          element={user ? <Navigate to="/dashboard" /> : <Register />}
-        />
-        <Route
-          path="/features"
-          element={<FeaturesPage />}
-        />
-        <Route
-          path="/use-cases"
-          element={<UseCasesPage />}
-        />
-        <Route
-          path="/docs"
-          element={<DocsPage />}
-        />
-        <Route path="/docs/getting-started" element={<DocsGettingStartedPage />} />
-        <Route path="/docs/editor" element={<DocsEditorPage />} />
-        <Route path="/docs/collaboration" element={<DocsCollaborationPage />} />
-        <Route path="/docs/projects" element={<DocsProjectsPage />} />
-        <Route path="/docs/execution" element={<DocsExecutionPage />} />
-        <Route path="/docs/chat" element={<DocsChatPage />} />
-        <Route path="/docs/git" element={<DocsGitPage />} />
-        <Route path="/docs/roles" element={<DocsRolesPage />} />
-        <Route path="/docs/troubleshooting" element={<DocsTroubleshootingPage />} />
-        <Route path="/docs/faq" element={<DocsFaqPage />} />
-        <Route
-          path="/dashboard"
-          element={<ProtectedRoute element={<Dashboard />} user={user} />}
-        />
-        <Route
-          path="/editor/:projectId"
-          element={<ProtectedRoute element={<Editor />} user={user} />}
-        />
-        <Route path="/github/callback" element={<GithubCallback />} />
-        <Route
-          path="/profile"
-          element={<ProtectedRoute element={<Profile />} user={user} />}
-        />
-      </Routes>
-    </Router>
+    <ThemeProvider>
+      <Router>
+        <Routes>
+          <Route
+            path="/"
+            element={<LandingPage />}
+          />
+          <Route
+            path="/login"
+            element={<Login />}
+          />
+          <Route
+            path="/register"
+            element={user ? <Navigate to="/dashboard" /> : <Register />}
+          />
+          <Route
+            path="/features"
+            element={<FeaturesPage />}
+          />
+          <Route
+            path="/use-cases"
+            element={<UseCasesPage />}
+          />
+          <Route
+            path="/docs"
+            element={<DocsPage />}
+          />
+          <Route path="/docs/getting-started" element={<DocsGettingStartedPage />} />
+          <Route path="/docs/editor" element={<DocsEditorPage />} />
+          <Route path="/docs/collaboration" element={<DocsCollaborationPage />} />
+          <Route path="/docs/projects" element={<DocsProjectsPage />} />
+          <Route path="/docs/execution" element={<DocsExecutionPage />} />
+          <Route path="/docs/chat" element={<DocsChatPage />} />
+          <Route path="/docs/git" element={<DocsGitPage />} />
+          <Route path="/docs/roles" element={<DocsRolesPage />} />
+          <Route path="/docs/troubleshooting" element={<DocsTroubleshootingPage />} />
+          <Route path="/docs/faq" element={<DocsFaqPage />} />
+          <Route
+            path="/dashboard"
+            element={<ProtectedRoute element={<Dashboard />} user={user} />}
+          />
+          <Route
+            path="/editor/:projectId"
+            element={<ProtectedRoute element={<Editor />} user={user} />}
+          />
+          <Route path="/github/callback" element={<GithubCallback />} />
+          <Route
+            path="/profile"
+            element={<ProtectedRoute element={<Profile />} user={user} />}
+          />
+        </Routes>
+      </Router>
+    </ThemeProvider>
   );
 }
 

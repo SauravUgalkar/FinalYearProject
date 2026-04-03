@@ -6,7 +6,6 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #000000 !important;
 }
 
 code {
@@ -19,7 +18,6 @@ code {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #000000 !important;
 }
 
 html, body {
@@ -27,7 +25,20 @@ html, body {
   height: 100%;
   margin: 0;
   padding: 0;
+}
+
+/* Dark mode: black base background */
+html.dark body,
+html.dark #root,
+html.dark html {
   background-color: #000000 !important;
+}
+
+/* Light mode: white/off-white base background (also handled in index.css) */
+html.light body,
+html.light #root,
+html.light html {
+  background-color: #f8fafc !important;
 }
 
 /* GitLens-like blame decorations */

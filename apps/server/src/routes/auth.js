@@ -2,7 +2,53 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const User = require('../models/User');
+const { Resend } = require('resend');
+
+// Fail fast if the JWT secret is not set
+if (!process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET environment variable is required');
+}
+
+// Resend client — only initialised when an API key is configured
+const resendClient = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+
+const OTP_EXPIRY_SECONDS = 600; // 10 minutes
+
+/** Generate a cryptographically secure 6-digit OTP */
+function generateOtp() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+/** Send an OTP email via Resend.  Returns true on success, throws on failure. */
+async function sendOtpEmail(to, otp) {
+  if (!resendClient) {
+    throw new Error('Email service is not configured (RESEND_API_KEY missing)');
+  }
+  const from = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  await resendClient.emails.send({
+    from,
+    to,
+    subject: 'Your CollabCode verification code',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#0ea5e9">Verify your email</h2>
+        <p>Use the code below to complete your CollabCode sign-up.
+           It expires in 10&nbsp;minutes.</p>
+        <div style="font-size:2.5rem;font-weight:700;letter-spacing:0.3em;
+                    text-align:center;padding:24px;background:#f0f9ff;
+                    border-radius:12px;color:#0369a1">${otp}</div>
+        <p style="color:#64748b;font-size:0.85rem">
+          If you did not request this, you can safely ignore this email.
+        </p>
+      </div>`,
+    text: `Your CollabCode verification code is: ${otp}\n\nIt expires in 10 minutes.`,
+  });
+  return true;
+}
 
 // Middleware to verify JWT
 const verifyToken = (req, res, next) => {
@@ -12,7 +58,7 @@ const verifyToken = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your_secret_key');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = decoded.userId;
     next();
   } catch (error) {
@@ -20,26 +66,25 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// Register
-router.post('/register', async (req, res, next) => {
+// Step 1 – Register: validate, send OTP, return a short-lived otpToken (stateless)
+router.post('/register', async (req, res) => {
   try {
-    console.log('Register request body:', req.body);
     const { name, email, password, codingLanguages } = req.body;
 
     // Validate input
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
     if (!email || !email.trim()) {
       return res.status(400).json({ error: 'Email is required' });
     }
     if (!password || password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: 'Name is required' });
-    }
 
     const trimmedEmail = email.toLowerCase().trim();
 
-    // Check if user exists
+    // Check if user already exists
     let existingUser;
     try {
       existingUser = await User.findOne({ email: trimmedEmail });
@@ -52,7 +97,7 @@ router.post('/register', async (req, res, next) => {
       return res.status(409).json({ error: 'User already exists with this email' });
     }
 
-    // Hash password
+    // Hash password upfront so plaintext never travels in the OTP token
     let hashedPassword;
     try {
       hashedPassword = await bcrypt.hash(password, 10);
@@ -61,15 +106,100 @@ router.post('/register', async (req, res, next) => {
       return res.status(500).json({ error: 'Failed to process password' });
     }
 
-    // Create user
+    // Generate OTP and embed it (along with registration data) in a short-lived JWT
+    const otp = generateOtp();
+    let otpToken;
+    try {
+      otpToken = jwt.sign(
+        {
+          purpose: 'email-verification',
+          otp,
+          name: name.trim(),
+          email: trimmedEmail,
+          hashedPassword,
+          codingLanguages: Array.isArray(codingLanguages) ? codingLanguages : [],
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: OTP_EXPIRY_SECONDS }
+      );
+    } catch (tokenErr) {
+      console.error('OTP token generation error:', tokenErr);
+      return res.status(500).json({ error: 'Failed to generate verification token' });
+    }
+
+    // Send OTP email
+    try {
+      await sendOtpEmail(trimmedEmail, otp);
+    } catch (emailErr) {
+      console.error('OTP email send error:', emailErr);
+      return res.status(500).json({ error: 'Failed to send verification email. Please try again.' });
+    }
+
+    console.log('OTP sent for new user registration');
+    res.status(200).json({
+      message: 'Verification code sent to your email.',
+      otpToken,
+    });
+  } catch (err) {
+    console.error('Register endpoint error:', err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: 'Internal server error during registration' });
+  }
+});
+
+// Step 2 – Verify OTP: confirm code, create account, return auth token
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { otpToken, otp } = req.body;
+
+    if (!otpToken || !otp) {
+      return res.status(400).json({ error: 'otpToken and otp are required' });
+    }
+
+    // Decode and verify the short-lived JWT
+    let payload;
+    try {
+      payload = jwt.verify(otpToken, process.env.JWT_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(400).json({ error: 'Verification code has expired. Please register again.' });
+      }
+      return res.status(400).json({ error: 'Invalid verification token.' });
+    }
+
+    if (payload.purpose !== 'email-verification') {
+      return res.status(400).json({ error: 'Invalid token purpose.' });
+    }
+
+    const otpInput = Buffer.from(otp.trim());
+    const otpStored = Buffer.from(payload.otp);
+    if (
+      otpInput.length !== otpStored.length ||
+      !crypto.timingSafeEqual(otpInput, otpStored)
+    ) {
+      return res.status(400).json({ error: 'Incorrect verification code.' });
+    }
+
+    // Double-check the email is still available (race-condition guard)
+    let existingUser;
+    try {
+      existingUser = await User.findOne({ email: payload.email });
+    } catch (dbErr) {
+      console.error('Database error checking user:', dbErr);
+      return res.status(503).json({ error: 'Database connection error. Please try again.' });
+    }
+
+    if (existingUser) {
+      return res.status(409).json({ error: 'User already exists with this email' });
+    }
+
+    // Create the user
     const user = new User({
-      name: name.trim(),
-      email: trimmedEmail,
-      password: hashedPassword,
-      codingLanguages: Array.isArray(codingLanguages) ? codingLanguages : []
+      name: payload.name,
+      email: payload.email,
+      password: payload.hashedPassword,
+      codingLanguages: payload.codingLanguages || [],
     });
 
-    // Save user to database
     let savedUser;
     try {
       savedUser = await user.save();
@@ -81,12 +211,12 @@ router.post('/register', async (req, res, next) => {
       return res.status(500).json({ error: 'Failed to create user' });
     }
 
-    // Generate token
+    // Generate long-lived auth token
     let token;
     try {
       token = jwt.sign(
         { userId: savedUser._id },
-        process.env.JWT_SECRET || 'your_secret_key',
+        process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
     } catch (tokenErr) {
@@ -94,19 +224,19 @@ router.post('/register', async (req, res, next) => {
       return res.status(500).json({ error: 'Failed to generate auth token' });
     }
 
-    console.log(`User registered successfully: ${trimmedEmail}`);
+    console.log('User registered successfully');
     res.status(201).json({
       user: {
         id: savedUser._id,
         name: savedUser.name,
         email: savedUser.email,
-        codingLanguages: savedUser.codingLanguages || []
+        codingLanguages: savedUser.codingLanguages || [],
       },
-      token
+      token,
     });
   } catch (err) {
-    console.error('Register endpoint error:', err && err.stack ? err.stack : err);
-    return res.status(500).json({ error: 'Internal server error during registration' });
+    console.error('Verify OTP endpoint error:', err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: 'Internal server error during OTP verification' });
   }
 });
 
@@ -153,7 +283,7 @@ router.post('/login', async (req, res, next) => {
     try {
       token = jwt.sign(
         { userId: user._id },
-        process.env.JWT_SECRET || 'your_secret_key',
+        process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
     } catch (tokenErr) {
