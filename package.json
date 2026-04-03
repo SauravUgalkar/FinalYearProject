@@ -30,8 +30,5 @@
     "react"
   ],
   "author": "Your Name",
-  "license": "MIT",
-  "dependencies": {
-    "ajv": "^8.18.0"
-  }
+  "license": "MIT"
 }
