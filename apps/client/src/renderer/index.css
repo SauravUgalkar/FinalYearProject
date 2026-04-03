@@ -74,9 +74,6 @@ html.light .backdrop-blur-sm {
   --tw-backdrop-blur: blur(12px);
 }
 
-/* Hover utility overrides */
-html.light .hover\:bg-white\/10:hover { background-color: rgba(15,23,42,0.06) !important; }
-
 /* Slate backgrounds used in Analytics / Editor sidebar panels */
 html.light .bg-slate-950,
 html.light .bg-slate-900 { background-color: #f1f5f9 !important; }
@@ -112,6 +109,61 @@ html.light .file-tree-row-selected {
 html.light ::-webkit-scrollbar-track { background: #f1f5f9; }
 html.light ::-webkit-scrollbar-thumb { background: #94a3b8; }
 html.light ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* ── Docs / card panels (opacity-based bg classes stay invisible in light) ── */
+/* bg-white/[0.04] used in DocsOverviewPage and DocTopic sections */
+html.light .bg-white\/\[0\.04\] {
+  background-color: #ffffff !important;
+  box-shadow: 0 2px 12px rgba(15,23,42,0.08) !important;
+}
+/* bg-white/[0.06], bg-white/[0.08] used elsewhere on public pages */
+html.light .bg-white\/\[0\.06\],
+html.light .bg-white\/\[0\.08\] {
+  background-color: #f8fafc !important;
+  box-shadow: 0 2px 12px rgba(15,23,42,0.08) !important;
+}
+
+/* Gradient slate-950 backgrounds used in DocsLayout main article and sidebar */
+html.light .from-slate-950\/80,
+html.light .to-slate-950\/60,
+html.light .from-slate-950\/60,
+html.light .bg-gradient-to-br {
+  /* reset gradient; background colour handled by bg-* overrides above */
+  background-image: none !important;
+}
+html.light .bg-slate-950\/60  { background-color: #ffffff !important; box-shadow: 0 4px 24px rgba(15,23,42,0.1) !important; }
+html.light .bg-slate-950\/70  { background-color: #ffffff !important; box-shadow: 0 4px 24px rgba(15,23,42,0.1) !important; }
+html.light .bg-slate-950\/80  { background-color: #f1f5f9 !important; }
+
+/* Hover backgrounds that reference opacity-white */
+html.light .hover\:bg-white\/10:hover  { background-color: rgba(15,23,42,0.06) !important; }
+html.light .hover\:text-white:hover    { color: #0f172a !important; }
+
+/* Dashboard stat-card inner mini-tiles */
+html.light .bg-slate-900\/70   { background-color: #f1f5f9 !important; }
+
+/* Ensure text-white in sections/headings reads as dark in light mode */
+html.light h1.text-white,
+html.light h2.text-white,
+html.light h3.text-white,
+html.light h4.text-white,
+html.light .font-bold.text-white,
+html.light .font-semibold.text-white { color: #0f172a !important; }
+
+/* Docs nav active link text should stay white (on cyan bg) */
+html.light .bg-gradient-to-r.from-cyan-400 .text-slate-900 { color: #0f172a !important; }
+
+/* Dashboard language-tag chips */
+html.light .rounded-full.bg-cyan-300\/10  { background-color: rgba(8,145,178,0.12) !important; }
+html.light .text-cyan-100  { color: #0e7490 !important; }
+html.light .text-cyan-200  { color: #0891b2 !important; }
+html.light .text-cyan-300  { color: #0369a1 !important; }
+
+/* Analytics/Git panel status badge colours – keep colours but darken text slightly */
+html.light .text-emerald-300 { color: #059669 !important; }
+html.light .text-rose-300    { color: #dc2626 !important; }
+html.light .text-amber-300   { color: #d97706 !important; }
+html.light .text-fuchsia-300 { color: #9333ea !important; }
 
 /* ============================================================
    TEXT SELECTION COLOURS

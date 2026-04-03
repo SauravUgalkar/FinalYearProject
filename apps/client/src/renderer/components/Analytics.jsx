@@ -65,6 +65,8 @@ export default function Analytics({
   allUsersData,
   activityFeed = [],
   projectName = 'Project',
+  projectDescription = '',
+  projectLanguage = 'javascript',
   collaborators = [],
   blameData = [],
 }) {
@@ -103,23 +105,55 @@ export default function Analytics({
 
       // ── COVER / TITLE BLOCK ─────────────────────────────────────────────
       doc.setFillColor(2, 6, 23);          // slate-950
-      doc.rect(0, 0, pageWidth, 40, 'F');
+      doc.rect(0, 0, pageWidth, 46, 'F');
 
       doc.setTextColor(34, 211, 238);      // cyan-400
       doc.setFontSize(18);
       doc.setFont('helvetica', 'bold');
-      doc.text(projectName, 14, 16);
+      doc.text(projectName, 14, 14);
 
       doc.setTextColor(148, 163, 184);     // slate-400
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
-      doc.text(`Analytics Report  •  Generated: ${humanDate}`, 14, 24);
+      doc.text(`Analytics Report  •  Generated: ${humanDate}`, 14, 22);
 
       doc.setDrawColor(34, 211, 238);
       doc.setLineWidth(0.5);
-      doc.line(14, 28, pageWidth - 14, 28);
+      doc.line(14, 26, pageWidth - 14, 26);
 
-      let y = 46;
+      let y = 52;
+
+      // ── PROJECT INFORMATION ──────────────────────────────────────────────
+      doc.setTextColor(15, 23, 42);
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Project Information', 14, y);
+      y += 6;
+
+      // Collect unique languages from executions (or fall back to projectLanguage)
+      const languagesUsed = Array.from(
+        new Set(executions.map((e) => e.language).filter(Boolean))
+      );
+      const techStack = languagesUsed.length > 0
+        ? languagesUsed.join(', ')
+        : (projectLanguage || 'javascript');
+
+      autoTable(doc, {
+        startY: y,
+        head: [['Field', 'Value']],
+        body: [
+          ['Project Name', projectName],
+          ['Description', projectDescription || '—'],
+          ['Tech Stack / Languages', techStack],
+          ['Total Collaborators', String(collaborators.length)],
+        ],
+        headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
+        margin: { left: 14, right: 14 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
 
       // ── EXECUTION STATISTICS ────────────────────────────────────────────
       doc.setTextColor(15, 23, 42);
@@ -207,32 +241,66 @@ export default function Analytics({
         y = doc.lastAutoTable.finalY + 10;
       }
 
-      // ── EXECUTION HISTORY ────────────────────────────────────────────────
+      // ── EXECUTION HISTORY — SUCCESS ──────────────────────────────────────
+      const successRows = executions
+        .filter((e) => e.status === 'success')
+        .slice(0, 100)
+        .map((item) => [
+          item.username || 'Unknown',
+          item.language || '—',
+          item.executionTime != null ? `${item.executionTime} ms` : '—',
+          item.createdAt
+            ? new Date(item.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+            : '—',
+        ]);
+
       doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(15, 23, 42);
-      doc.text('Execution History', 14, y);
+      doc.text('Execution History — Successful', 14, y);
       y += 6;
 
-      const historyRows = executions.slice(0, 100).map((item) => [
-        item.username || 'Unknown',
-        item.language || '—',
-        (STATUS_LABELS[item.status] || item.status || '—'),
-        item.executionTime != null ? `${item.executionTime} ms` : '—',
-        item.createdAt
-          ? new Date(item.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
-          : '—',
-      ]);
-
-      if (historyRows.length === 0) historyRows.push(['No executions recorded', '', '', '', '']);
+      if (successRows.length === 0) successRows.push(['No successful executions', '', '', '']);
 
       autoTable(doc, {
         startY: y,
-        head: [['User', 'Language', 'Status', 'Exec Time', 'Date & Time']],
-        body: historyRows,
-        headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+        head: [['User', 'Language', 'Exec Time', 'Date & Time']],
+        body: successRows,
+        headStyles: { fillColor: [5, 150, 105], textColor: 255, fontStyle: 'bold', fontSize: 9 },
         bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
-        alternateRowStyles: { fillColor: [241, 245, 249] },
+        alternateRowStyles: { fillColor: [236, 253, 245] },
+        margin: { left: 14, right: 14 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+
+      // ── EXECUTION HISTORY — ERRORS ───────────────────────────────────────
+      const errorRows = executions
+        .filter((e) => e.status === 'error' || e.status === 'timeout')
+        .slice(0, 100)
+        .map((item) => [
+          item.username || 'Unknown',
+          item.language || '—',
+          STATUS_LABELS[item.status] || item.status || '—',
+          item.createdAt
+            ? new Date(item.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+            : '—',
+        ]);
+
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('Execution History — Errors & Timeouts', 14, y);
+      y += 6;
+
+      if (errorRows.length === 0) errorRows.push(['No errors recorded', '', '', '']);
+
+      autoTable(doc, {
+        startY: y,
+        head: [['User', 'Language', 'Status', 'Date & Time']],
+        body: errorRows,
+        headStyles: { fillColor: [220, 38, 38], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+        alternateRowStyles: { fillColor: [254, 242, 242] },
         margin: { left: 14, right: 14 },
       });
       y = doc.lastAutoTable.finalY + 10;

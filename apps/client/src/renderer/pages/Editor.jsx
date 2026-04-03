@@ -32,6 +32,8 @@ export default function EditorPage() {
   const [sidebarTab, setSidebarTab] = useState('files'); // 'files', 'chat', 'analytics', 'export', 'git', or 'settings'
   const [unreadCounts, setUnreadCounts] = useState({});
   const [projectName, setProjectName] = useState('Untitled Project');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [projectLanguage, setProjectLanguage] = useState('javascript');
   const [projectOwnerId, setProjectOwnerId] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -202,6 +204,8 @@ export default function EditorPage() {
         console.log('Project loaded from server:', response.data);
         const normalizedFiles = sanitizeProjectFiles(response.data.files || []);
         setProjectName(response.data.name || 'Untitled Project');
+        setProjectDescription(response.data.description || '');
+        setProjectLanguage(response.data.language || 'javascript');
         setProjectOwnerId(response.data.owner?._id || response.data.owner);
         setCollaborators(response.data.collaborators || []);
         
@@ -2041,6 +2045,8 @@ export default function EditorPage() {
                   allUsersData={allUsersAnalytics}
                   activityFeed={activityFeed}
                   projectName={projectName}
+                  projectDescription={projectDescription}
+                  projectLanguage={projectLanguage}
                   collaborators={collaborators}
                   blameData={blameData}
                 />
