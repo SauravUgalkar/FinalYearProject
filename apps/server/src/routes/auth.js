@@ -170,7 +170,7 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ error: 'Invalid token purpose.' });
     }
 
-    if (String(otp).trim() !== String(payload.otp)) {
+    if (otp.trim() !== payload.otp) {
       return res.status(400).json({ error: 'Incorrect verification code.' });
     }
 

@@ -228,7 +228,7 @@ export default function Register() {
                     pattern="\d{6}"
                     maxLength={6}
                     value={otp}
-                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
                     placeholder="000000"
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-center text-2xl tracking-[0.5em] text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
                     required
