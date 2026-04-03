@@ -24,6 +24,11 @@ const ANALYTICS_LIMITS = {
 };
 const MAX_ANALYTICS_EVENT_OUTPUT_CHARS = Number(process.env.MAX_ANALYTICS_EVENT_OUTPUT_CHARS || 8000);
 
+const EXEC_QUEUE_KEEP_COMPLETE_AGE_SECONDS = Number(process.env.EXEC_QUEUE_KEEP_COMPLETE_AGE_SECONDS || 900);
+const EXEC_QUEUE_KEEP_COMPLETE_COUNT = Number(process.env.EXEC_QUEUE_KEEP_COMPLETE_COUNT || 100);
+const EXEC_QUEUE_KEEP_FAILED_AGE_SECONDS = Number(process.env.EXEC_QUEUE_KEEP_FAILED_AGE_SECONDS || 86400);
+const EXEC_QUEUE_KEEP_FAILED_COUNT = Number(process.env.EXEC_QUEUE_KEEP_FAILED_COUNT || 500);
+
 // -----------------------------------------------------------------------------
 // ENV VALIDATION (FAIL FAST)
 // -----------------------------------------------------------------------------
@@ -158,6 +163,17 @@ redisClient.on("error", (err) => {
 
 const executionQueue = new Queue("code-execution", {
   connection: redisClient,
+  defaultJobOptions: {
+    // Keep only a small window of completed/failed jobs so Redis stays bounded.
+    removeOnComplete: {
+      age: EXEC_QUEUE_KEEP_COMPLETE_AGE_SECONDS,
+      count: EXEC_QUEUE_KEEP_COMPLETE_COUNT,
+    },
+    removeOnFail: {
+      age: EXEC_QUEUE_KEEP_FAILED_AGE_SECONDS,
+      count: EXEC_QUEUE_KEEP_FAILED_COUNT,
+    },
+  },
 });
 
 // Create QueueEvents for cross-process communication

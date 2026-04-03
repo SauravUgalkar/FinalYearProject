@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, X } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Shield, X } from 'lucide-react';
 import { API_URL } from '../config/runtime';
 import { authStorage } from '../services/authStorage';
 
@@ -86,94 +86,110 @@ export default function Login() {
   };
 
   return (
-    <div className={`min-h-screen ${LANDING_BG} relative flex items-center justify-center overflow-hidden`}>
+    <div className={`min-h-screen ${LANDING_BG} relative overflow-hidden text-white`}>
       <div className="absolute left-8 top-24 h-48 w-48 rounded-full bg-cyan-400/10 blur-3xl" aria-hidden="true" />
       <div className="absolute right-8 top-16 h-56 w-56 rounded-full bg-fuchsia-400/10 blur-3xl" aria-hidden="true" />
 
       <button
         onClick={handleBack}
-        className="absolute left-6 top-6 z-10 inline-flex items-center gap-2 rounded-full border border-white/20 bg-slate-950/50 px-4 py-2 text-sm text-white backdrop-blur transition hover:bg-white/10"
+        className="absolute left-6 top-6 z-10 inline-flex items-center gap-2 rounded-full border border-white/15 bg-slate-950/50 px-4 py-2 text-sm text-white backdrop-blur transition hover:bg-white/10"
       >
         <ArrowLeft size={16} />
         Back
       </button>
 
-      <div className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-slate-950/60 p-8 shadow-[0_24px_100px_rgba(15,23,42,0.6)] backdrop-blur">
-        <div className="flex flex-col items-center mb-6 gap-3">
-          <img src="/logo.png" alt="CollabCode" className="h-24 w-24 object-contain" />
-          <h1 className="text-3xl font-bold text-white">CollabCode</h1>
-        </div>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && <div className="text-red-400 text-sm bg-red-900 p-3 rounded">{error}</div>}
-          
-          <div>
-            <label className="block text-gray-300 text-sm font-medium mb-2">Email</label>
-            <div className="relative">
-              <input
-                type="email"
-                name="email"
-                value={formData.email}
-                onChange={handleChange}
-                autoComplete="email"
-                className="w-full px-4 py-2 pr-10 bg-gray-700 text-white rounded border border-gray-600 focus:outline-none focus:border-blue-500"
-                required
-              />
-              {formData.email && (
-                <button
-                  type="button"
-                  onClick={() => setFormData(prev => ({ ...prev, email: '' }))}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-white rounded-full hover:bg-gray-600 transition"
-                  title="Clear email"
-                >
-                  <X size={16} />
-                </button>
-              )}
+      <div className="relative z-10 mx-auto flex min-h-screen max-w-2xl items-center px-6 py-16 lg:px-10">
+        <section className="mx-auto w-full max-w-md rounded-[2rem] border border-white/10 bg-slate-950/75 p-8 shadow-[0_24px_100px_rgba(15,23,42,0.6)] backdrop-blur sm:p-10">
+          <div className="mb-8 flex flex-col items-center gap-3 text-center">
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100">
+              <Shield size={12} />
+              Secure access
+            </div>
+            <img src="/logo.png" alt="CollabCode" className="h-20 w-20 object-contain" />
+            <div>
+              <h2 className="text-3xl font-semibold text-white">Welcome back</h2>
+              <p className="mt-2 text-sm text-slate-300">Sign in and continue where your work left off.</p>
             </div>
           </div>
 
-          <div>
-            <label className="block text-gray-300 text-sm font-medium mb-2">Password</label>
-            <input
-              type="password"
-              name="password"
-              value={formData.password}
-              onChange={handleChange}
-              autoComplete="current-password"
-              className="w-full px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:outline-none focus:border-blue-500"
-              required
-            />
-          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{error}</div>}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition disabled:opacity-50"
-          >
-            {loading ? 'Logging in...' : 'Login'}
-          </button>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-200">Email</label>
+              <div className="relative">
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  autoComplete="email"
+                  placeholder="name@company.com"
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 pr-10 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
+                  required
+                />
+                {formData.email && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData((prev) => ({ ...prev, email: '' }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                    title="Clear email"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
 
-          <div className="text-center">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-200">Password</label>
+              <input
+                type="password"
+                name="password"
+                value={formData.password}
+                onChange={handleChange}
+                autoComplete="current-password"
+                placeholder="Enter your password"
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
+                required
+              />
+            </div>
+
             <button
-              type="button"
-              onClick={() => setShowForgotPassword(true)}
-              className="text-sm text-blue-400 hover:text-blue-300 transition"
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-2xl bg-gradient-to-r from-cyan-300 to-sky-300 px-4 py-3 font-semibold text-slate-950 transition hover:-translate-y-0.5 hover:from-cyan-200 hover:to-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Forgot Password?
+              {loading ? 'Signing in...' : 'Login'}
             </button>
-          </div>
-        </form>
 
-        <p className="text-gray-400 text-sm text-center mt-4">
-          Don't have an account?{' '}
-          <a href="/register" className="text-blue-400 hover:text-blue-300">Register</a>
-        </p>
+            <div className="flex items-center justify-between gap-4 text-sm">
+              <button
+                type="button"
+                onClick={() => setShowForgotPassword(true)}
+                className="text-cyan-200 transition hover:text-cyan-100"
+              >
+                Forgot password?
+              </button>
+              <Link to="/register" className="text-slate-300 transition hover:text-white">
+                Create account
+              </Link>
+            </div>
+          </form>
+
+          <p className="mt-6 text-center text-sm text-slate-400">
+            Need a new workspace?{' '}
+            <Link to="/register" className="font-medium text-cyan-200 transition hover:text-cyan-100">
+              Register here
+            </Link>
+          </p>
+        </section>
       </div>
 
       {/* Forgot Password Modal */}
       {showForgotPassword && (
-        <div className={`fixed inset-0 ${LANDING_BG} flex items-center justify-center z-50 p-4`}>
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-950/70 p-6 shadow-[0_24px_100px_rgba(15,23,42,0.6)] backdrop-blur">
+        <div className={`fixed inset-0 ${LANDING_BG} z-50 flex items-center justify-center p-4`}>
+          <div className="w-full max-w-md rounded-[2rem] border border-white/10 bg-slate-950/80 p-6 shadow-[0_24px_100px_rgba(15,23,42,0.6)] backdrop-blur">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold text-white">Reset Password</h2>
               <button
@@ -191,12 +207,12 @@ export default function Login() {
 
             <form onSubmit={handleForgotPassword} className="space-y-4">
               {resetMessage && (
-                <div className="text-green-400 text-sm bg-green-900 p-3 rounded">
+                <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
                   ✓ {resetMessage}
                 </div>
               )}
               {resetError && (
-                <div className="text-red-400 text-sm bg-red-900 p-3 rounded">
+                <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
                   {resetError}
                 </div>
               )}
@@ -210,7 +226,7 @@ export default function Login() {
                   value={resetEmail}
                   onChange={(e) => setResetEmail(e.target.value)}
                   placeholder="your@email.com"
-                  className="w-full px-4 py-2 bg-gray-700 text-white rounded border border-gray-600 focus:outline-none focus:border-blue-500"
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-300/20"
                   required
                 />
                 <p className="text-xs text-gray-400 mt-2">
@@ -221,7 +237,7 @@ export default function Login() {
               <div className="flex gap-3">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition"
+                  className="flex-1 rounded-2xl bg-gradient-to-r from-cyan-300 to-sky-300 px-4 py-3 font-semibold text-slate-950 transition hover:from-cyan-200 hover:to-sky-200"
                 >
                   Send Reset Link
                 </button>
@@ -233,7 +249,7 @@ export default function Login() {
                     setResetError('');
                     setResetMessage('');
                   }}
-                  className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded font-medium transition"
+                  className="flex-1 rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 font-medium text-white transition hover:bg-white/10"
                 >
                   Cancel
                 </button>

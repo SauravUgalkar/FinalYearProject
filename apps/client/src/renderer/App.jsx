@@ -10,7 +10,19 @@ import Editor from './pages/Editor';
 import Profile from './pages/Profile';
 import GithubCallback from './pages/GithubCallback';
 import LandingPage from './pages/LandingPage';
+import FeaturesPage from './pages/FeaturesPage';
+import UseCasesPage from './pages/UseCasesPage';
 import DocsPage from './pages/DocsPage';
+import DocsGettingStartedPage from './pages/docs/DocsGettingStartedPage';
+import DocsEditorPage from './pages/docs/DocsEditorPage';
+import DocsCollaborationPage from './pages/docs/DocsCollaborationPage';
+import DocsProjectsPage from './pages/docs/DocsProjectsPage';
+import DocsExecutionPage from './pages/docs/DocsExecutionPage';
+import DocsChatPage from './pages/docs/DocsChatPage';
+import DocsGitPage from './pages/docs/DocsGitPage';
+import DocsRolesPage from './pages/docs/DocsRolesPage';
+import DocsTroubleshootingPage from './pages/docs/DocsTroubleshootingPage';
+import DocsFaqPage from './pages/docs/DocsFaqPage';
 
 // Components
 
@@ -91,9 +103,27 @@ function App() {
           element={user ? <Navigate to="/dashboard" /> : <Register />}
         />
         <Route
+          path="/features"
+          element={<FeaturesPage />}
+        />
+        <Route
+          path="/use-cases"
+          element={<UseCasesPage />}
+        />
+        <Route
           path="/docs"
           element={<DocsPage />}
         />
+        <Route path="/docs/getting-started" element={<DocsGettingStartedPage />} />
+        <Route path="/docs/editor" element={<DocsEditorPage />} />
+        <Route path="/docs/collaboration" element={<DocsCollaborationPage />} />
+        <Route path="/docs/projects" element={<DocsProjectsPage />} />
+        <Route path="/docs/execution" element={<DocsExecutionPage />} />
+        <Route path="/docs/chat" element={<DocsChatPage />} />
+        <Route path="/docs/git" element={<DocsGitPage />} />
+        <Route path="/docs/roles" element={<DocsRolesPage />} />
+        <Route path="/docs/troubleshooting" element={<DocsTroubleshootingPage />} />
+        <Route path="/docs/faq" element={<DocsFaqPage />} />
         <Route
           path="/dashboard"
           element={<ProtectedRoute element={<Dashboard />} user={user} />}
