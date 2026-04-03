@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const fs = require('fs');
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/User');
@@ -18,34 +20,74 @@ const resendClient = process.env.RESEND_API_KEY
 
 const OTP_EXPIRY_SECONDS = 600; // 10 minutes
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getLogoDataUri() {
+  try {
+    const logoPath = path.resolve(__dirname, '../../../client/public/logo.png');
+    const logoBuffer = fs.readFileSync(logoPath);
+    return `data:image/png;base64,${logoBuffer.toString('base64')}`;
+  } catch {
+    return '';
+  }
+}
+
+const logoDataUri = getLogoDataUri();
+
 /** Generate a cryptographically secure 6-digit OTP */
 function generateOtp() {
   return String(crypto.randomInt(100000, 1000000));
 }
 
 /** Send an OTP email via Resend.  Returns true on success, throws on failure. */
-async function sendOtpEmail(to, otp) {
+async function sendOtpEmail(to, otp, recipientName = '') {
   if (!resendClient) {
     throw new Error('Email service is not configured (RESEND_API_KEY missing)');
   }
   const from = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  const rawName = recipientName.trim() || 'there';
+  const safeName = escapeHtml(rawName);
+  const firstName = rawName.split(/\s+/)[0] || 'there';
   await resendClient.emails.send({
     from,
     to,
-    subject: 'Your CollabCode verification code',
+    subject: `${firstName}, verify your CollabCode account`,
     html: `
-      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
-        <h2 style="color:#0ea5e9">Verify your email</h2>
-        <p>Use the code below to complete your CollabCode sign-up.
-           It expires in 10&nbsp;minutes.</p>
-        <div style="font-size:2.5rem;font-weight:700;letter-spacing:0.3em;
-                    text-align:center;padding:24px;background:#f0f9ff;
-                    border-radius:12px;color:#0369a1">${otp}</div>
-        <p style="color:#64748b;font-size:0.85rem">
-          If you did not request this, you can safely ignore this email.
-        </p>
+      <div style="margin:0 auto;max-width:560px;padding:32px 20px;background:linear-gradient(180deg,#f8fafc 0%,#ffffff 100%);font-family:Inter,Arial,sans-serif;color:#0f172a">
+        <div style="border:1px solid #e2e8f0;border-radius:24px;overflow:hidden;background:#ffffff;box-shadow:0 20px 60px rgba(15,23,42,0.08)">
+          <div style="padding:28px 28px 20px;text-align:center;background:linear-gradient(135deg,#0f172a 0%,#0b1220 55%,#082f49 100%)">
+            ${logoDataUri ? `<img src="${logoDataUri}" alt="CollabCode" width="72" height="72" style="display:block;margin:0 auto 16px;border-radius:18px;object-fit:contain;background:rgba(255,255,255,0.08);padding:10px" />` : ''}
+            <div style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:rgba(34,211,238,0.14);color:#c3f0ff;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase">
+              Email verification
+            </div>
+            <h2 style="margin:18px 0 8px;font-size:28px;line-height:1.2;color:#ffffff">Welcome to CollabCode</h2>
+            <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7">Hi ${safeName}, use the code below to finish creating your account.</p>
+          </div>
+
+          <div style="padding:28px">
+            <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#334155">
+              We generated a secure 6-digit verification code for your sign-up. It expires in 10 minutes.
+            </p>
+
+            <div style="margin:24px 0;padding:22px;border:1px solid #bae6fd;border-radius:20px;background:linear-gradient(180deg,#ecfeff 0%,#eff6ff 100%);text-align:center">
+              <div style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:#0369a1;font-weight:700;margin-bottom:12px">Your verification code</div>
+              <div style="font-size:40px;font-weight:800;letter-spacing:0.38em;color:#0f172a;font-family:'Courier New',monospace;line-height:1">${otp}</div>
+            </div>
+
+            <div style="padding:16px 18px;border-radius:16px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;font-size:14px;line-height:1.7">
+              If you did not request this email, you can safely ignore it. Your code will expire automatically and cannot be used again.
+            </div>
+          </div>
+        </div>
       </div>`,
-    text: `Your CollabCode verification code is: ${otp}\n\nIt expires in 10 minutes.`,
+    text: `Hi ${recipientName || 'there'},\n\nYour CollabCode verification code is: ${otp}\nIt expires in 10 minutes.\n\nIf you did not request this email, you can ignore it.`,
   });
   return true;
 }
@@ -129,7 +171,7 @@ router.post('/register', async (req, res) => {
 
     // Send OTP email
     try {
-      await sendOtpEmail(trimmedEmail, otp);
+      await sendOtpEmail(trimmedEmail, otp, name.trim());
     } catch (emailErr) {
       console.error('OTP email send error:', emailErr);
       return res.status(500).json({ error: 'Failed to send verification email. Please try again.' });
