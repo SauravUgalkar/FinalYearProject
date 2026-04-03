@@ -18,7 +18,16 @@ class RoomManager {
     this.activeRooms = new Map();
     this.userRoomMap = new Map();
     this.codeChangeThrottle = new Map();
-    this.workerHealthcheckUrl = process.env.WORKER_HEALTHCHECK_URL || '';
+
+    // WORKER_URL is the base URL of the worker service (e.g. https://worker.onrender.com).
+    // WORKER_HEALTHCHECK_URL is the legacy full-URL override; kept for backwards-compatibility.
+    const workerBase = process.env.WORKER_URL
+      ? process.env.WORKER_URL.replace(/\/$/, '')
+      : '';
+    this.workerHealthcheckUrl = process.env.WORKER_HEALTHCHECK_URL
+      || (workerBase ? `${workerBase}/health` : '');
+    this.workerWakeUrl = workerBase ? `${workerBase}/wake` : this.workerHealthcheckUrl;
+
     this.workerKeepAliveIntervalMs = Number(process.env.WORKER_KEEPALIVE_INTERVAL_MS || 240000);
     this.workerKeepAliveTimer = null;
 
@@ -27,20 +36,40 @@ class RoomManager {
     }
   }
 
-  async warmWorkerForExecution() {
-    if (!this.workerHealthcheckUrl) return;
+  // Wake the worker service and wait for it to respond.
+  // Retries up to maxAttempts times with a short delay between attempts so
+  // that Render cold-starts (which can take 10–30 s) are handled gracefully.
+  async warmWorkerForExecution(maxAttempts = 2) {
+    const wakeUrl = this.workerWakeUrl || this.workerHealthcheckUrl;
+    if (!wakeUrl) return;
 
-    try {
-      const response = await axios.get(this.workerHealthcheckUrl, {
-        timeout: 15000,
-        validateStatus: () => true,
-      });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await axios.get(wakeUrl, {
+          // Allow up to 30 s for Render to cold-start the worker container.
+          timeout: 30000,
+          validateStatus: () => true,
+        });
 
-      const redisConnected = response?.data?.redisConnected;
-      console.log(`[RoomManager] Worker warmup status: HTTP ${response.status}, redisConnected=${redisConnected}`);
-    } catch (error) {
-      console.warn('[RoomManager] Worker warmup request failed:', error.message);
+        const redisConnected = response?.data?.redisConnected;
+        console.log(
+          `[RoomManager] Worker wake-up OK (attempt ${attempt}/${maxAttempts}): ` +
+          `HTTP ${response.status}, redisConnected=${redisConnected}`
+        );
+        return; // success — stop retrying
+      } catch (error) {
+        console.warn(
+          `[RoomManager] Worker wake-up failed (attempt ${attempt}/${maxAttempts}):`,
+          error.message
+        );
+        if (attempt < maxAttempts) {
+          // Wait 2 s before the next attempt.
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
     }
+
+    console.warn('[RoomManager] Worker did not respond after all wake-up attempts; proceeding anyway.');
   }
 
   startWorkerKeepAlive() {
@@ -48,8 +77,9 @@ class RoomManager {
     if (this.workerKeepAliveTimer) return;
 
     // Keep worker service warm on free web-service plans.
+    // Use a single attempt for background keep-alive pings (fast, non-blocking).
     this.workerKeepAliveTimer = setInterval(() => {
-      this.warmWorkerForExecution();
+      this.warmWorkerForExecution(1);
     }, this.workerKeepAliveIntervalMs);
 
     if (typeof this.workerKeepAliveTimer.unref === 'function') {
@@ -57,7 +87,7 @@ class RoomManager {
     }
 
     // Trigger an immediate warm-up once during startup.
-    this.warmWorkerForExecution();
+    this.warmWorkerForExecution(1);
   }
 
   sanitizeName(rawName) {

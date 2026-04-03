@@ -35,7 +35,6 @@ redisClient.on('connect', () => {
 });
 
 const EXECUTION_DIR = '/tmp/code-execution';
-const HEALTH_PORT = Number(process.env.PORT || 0);
 const EXECUTION_TIMEOUT_MS = Number(process.env.EXECUTION_TIMEOUT_MS || 10000);
 const MAX_CODE_CHARS = Number(process.env.MAX_CODE_CHARS || 200000);
 const MAX_INPUT_CHARS = Number(process.env.MAX_INPUT_CHARS || 10000);
@@ -641,23 +640,34 @@ setTimeout(() => {
 
 // Optional health endpoint so the worker can run as a Render Web Service
 // when Background Worker is unavailable on the current plan.
+// Always start the HTTP server — use PORT env var (set automatically by Render)
+// or fall back to 3001 so the process keeps a bound port on any platform.
+const HEALTH_PORT = Number(process.env.PORT || 3001);
+
 let healthServer = null;
-if (HEALTH_PORT > 0) {
-  healthServer = http.createServer((req, res) => {
-    if (req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', service: 'worker', redisConnected }));
-      return;
-    }
+healthServer = http.createServer((req, res) => {
+  // /wake — respond immediately so Render cold-starts the container ASAP.
+  // The actual job queue works through Redis; the worker is ready to pick
+  // up jobs as soon as it has connected to Redis.
+  if (req.url === '/wake') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', service: 'worker' }));
+    return;
+  }
 
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('collab-code-worker');
-  });
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', service: 'worker', redisConnected }));
+    return;
+  }
 
-  healthServer.listen(HEALTH_PORT, () => {
-    console.log(`🌐 Worker health server listening on port ${HEALTH_PORT}`);
-  });
-}
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('collab-code-worker');
+});
+
+healthServer.listen(HEALTH_PORT, () => {
+  console.log(`🌐 Worker health server listening on port ${HEALTH_PORT}`);
+});
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
