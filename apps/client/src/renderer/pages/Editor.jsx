@@ -2040,6 +2040,9 @@ export default function EditorPage() {
                   data={analytics}
                   allUsersData={allUsersAnalytics}
                   activityFeed={activityFeed}
+                  projectName={projectName}
+                  collaborators={collaborators}
+                  blameData={blameData}
                 />
               </div>
             )}

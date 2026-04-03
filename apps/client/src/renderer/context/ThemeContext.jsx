@@ -41,12 +41,12 @@ export function ThemeProvider({ children }) {
 
     setRipple({ x, y, bg: overlayBg });
 
-    // Switch the real theme early so elements beneath the overlay already
-    // have the new styles before the overlay fades out.
-    setTimeout(() => setTheme(nextTheme), 80);
+    // Switch the real theme after ~half the ripple duration so the new
+    // styles are visible as the overlay starts fading out.
+    setTimeout(() => setTheme(nextTheme), 200);
 
-    // Remove the overlay once the CSS animation finishes (~650 ms).
-    setTimeout(() => setRipple(null), 700);
+    // Remove the overlay once the CSS animation finishes (~1.4 s).
+    setTimeout(() => setRipple(null), 1500);
   };
 
   return (

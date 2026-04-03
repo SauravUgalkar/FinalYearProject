@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
   BarChart3,
+  Download,
   Filter,
   PlayCircle,
   Search,
@@ -63,6 +64,9 @@ export default function Analytics({
   data,
   allUsersData,
   activityFeed = [],
+  projectName = 'Project',
+  collaborators = [],
+  blameData = [],
 }) {
   const [executions, setExecutions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -71,12 +75,217 @@ export default function Analytics({
   const [outputLoading, setOutputLoading] = useState(false);
   const [deletingExecutionId, setDeletingExecutionId] = useState('');
   const [clearingHistory, setClearingHistory] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [filters, setFilters] = useState({
     user: '',
     language: '',
     status: '',
     search: '',
   });
+
+  /** Export all analytics data to a formatted PDF document. */
+  const exportToPdf = async () => {
+    setExportingPdf(true);
+    try {
+      // Dynamically import jsPDF and autoTable to keep the initial bundle lean.
+      const { jsPDF } = await import('jspdf');
+      const { default: autoTable } = await import('jspdf-autotable');
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const now = new Date();
+      // Human-readable date/time: "April 3, 2026 at 7:39 PM"
+      const humanDate = now.toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric',
+      }) + ' at ' + now.toLocaleTimeString('en-US', {
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      });
+
+      // ── COVER / TITLE BLOCK ─────────────────────────────────────────────
+      doc.setFillColor(2, 6, 23);          // slate-950
+      doc.rect(0, 0, pageWidth, 40, 'F');
+
+      doc.setTextColor(34, 211, 238);      // cyan-400
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text(projectName, 14, 16);
+
+      doc.setTextColor(148, 163, 184);     // slate-400
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Analytics Report  •  Generated: ${humanDate}`, 14, 24);
+
+      doc.setDrawColor(34, 211, 238);
+      doc.setLineWidth(0.5);
+      doc.line(14, 28, pageWidth - 14, 28);
+
+      let y = 46;
+
+      // ── EXECUTION STATISTICS ────────────────────────────────────────────
+      doc.setTextColor(15, 23, 42);
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Execution Statistics', 14, y);
+      y += 6;
+
+      autoTable(doc, {
+        startY: y,
+        head: [['Metric', 'Value']],
+        body: [
+          ['Total Runs', String(stats.totalRuns)],
+          ['Successful Runs', String(stats.successfulRuns)],
+          ['Failed Runs', String(stats.failedRuns)],
+          ['Currently Running', String(stats.runningRuns)],
+          ['Success Rate', `${stats.successRate}%`],
+          ['Failure Rate', `${stats.failureRate}%`],
+        ],
+        headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        columnStyles: { 0: { fontStyle: 'bold' } },
+        margin: { left: 14, right: 14 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+
+      // ── USERS AND THEIR ROLES ────────────────────────────────────────────
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('Users & Roles', 14, y);
+      y += 6;
+
+      const memberRows = collaborators.map((c) => [
+        c.name || c.email || 'Unknown',
+        c.email || '—',
+        (c.role || 'viewer').charAt(0).toUpperCase() + (c.role || 'viewer').slice(1),
+        c.joinedAt ? new Date(c.joinedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—',
+      ]);
+
+      if (memberRows.length === 0) {
+        memberRows.push(['No collaborators found', '', '', '']);
+      }
+
+      autoTable(doc, {
+        startY: y,
+        head: [['Name', 'Email', 'Role', 'Joined']],
+        body: memberRows,
+        headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        margin: { left: 14, right: 14 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+
+      // ── ALL-USERS ANALYTICS ─────────────────────────────────────────────
+      if (allUsersData && allUsersData.length > 0) {
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text('Collaborator Execution Summary', 14, y);
+        y += 6;
+
+        autoTable(doc, {
+          startY: y,
+          head: [['User', 'Total Runs', 'Successful', 'Failed', 'Success Rate']],
+          body: allUsersData.map((u) => {
+            const rate = u.totalRuns > 0
+              ? Math.round((u.successfulRuns / u.totalRuns) * 100)
+              : 0;
+            return [
+              u.userName || 'Unknown',
+              String(u.totalRuns || 0),
+              String(u.successfulRuns || 0),
+              String(u.failedRuns || 0),
+              `${rate}%`,
+            ];
+          }),
+          headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+          bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+          alternateRowStyles: { fillColor: [241, 245, 249] },
+          margin: { left: 14, right: 14 },
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ── EXECUTION HISTORY ────────────────────────────────────────────────
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('Execution History', 14, y);
+      y += 6;
+
+      const historyRows = executions.slice(0, 100).map((item) => [
+        item.username || 'Unknown',
+        item.language || '—',
+        (STATUS_LABELS[item.status] || item.status || '—'),
+        item.executionTime != null ? `${item.executionTime} ms` : '—',
+        item.createdAt
+          ? new Date(item.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+          : '—',
+      ]);
+
+      if (historyRows.length === 0) historyRows.push(['No executions recorded', '', '', '', '']);
+
+      autoTable(doc, {
+        startY: y,
+        head: [['User', 'Language', 'Status', 'Exec Time', 'Date & Time']],
+        body: historyRows,
+        headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+        alternateRowStyles: { fillColor: [241, 245, 249] },
+        margin: { left: 14, right: 14 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+
+      // ── GIT BLAME ────────────────────────────────────────────────────────
+      if (blameData && blameData.length > 0) {
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text('Git Blame Information', 14, y);
+        y += 6;
+
+        autoTable(doc, {
+          startY: y,
+          head: [['Line #', 'Author', 'Last Modified']],
+          body: blameData.slice(0, 200).map((b) => [
+            String(b.lineNumber || '—'),
+            b.userName || b.author || 'Unknown',
+            b.timestamp
+              ? new Date(b.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+              : '—',
+          ]),
+          headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold', fontSize: 9 },
+          bodyStyles: { fontSize: 9, textColor: [15, 23, 42] },
+          alternateRowStyles: { fillColor: [241, 245, 249] },
+          margin: { left: 14, right: 14 },
+        });
+      }
+
+      // ── FOOTER ───────────────────────────────────────────────────────────
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184);
+        doc.setFont('helvetica', 'normal');
+        doc.text(
+          `CollabCode Analytics  •  Page ${i} of ${totalPages}`,
+          pageWidth / 2,
+          doc.internal.pageSize.getHeight() - 8,
+          { align: 'center' }
+        );
+      }
+
+      const safeProjectName = projectName.replace(/[^a-z0-9_-]/gi, '_').substring(0, 40);
+      const dateTag = now.toISOString().slice(0, 10);
+      doc.save(`${safeProjectName}_analytics_${dateTag}.pdf`);
+    } catch (pdfError) {
+      console.error('PDF export failed:', pdfError);
+    } finally {
+      setExportingPdf(false);
+    }
+  };
 
   const fetchExecutions = useCallback(async () => {
     if (!projectId) return;
@@ -298,6 +507,20 @@ export default function Analytics({
 
   return (
     <div className="space-y-4 text-slate-100">
+      {/* Header row with title and Export PDF button */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-slate-100">Analytics</p>
+        <button
+          onClick={exportToPdf}
+          disabled={exportingPdf}
+          title="Export full analytics report as PDF"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-cyan-600/50 bg-cyan-900/30 text-cyan-300 hover:bg-cyan-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          <Download size={13} />
+          {exportingPdf ? 'Exporting…' : 'Export PDF'}
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <StatsCard label="Total Runs" value={stats.totalRuns} accent="text-cyan-300" icon={<PlayCircle size={16} />} />
         <StatsCard label="Success Rate" value={`${stats.successRate}%`} accent="text-emerald-300" icon={<BarChart3 size={16} />} />
