@@ -170,7 +170,12 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ error: 'Invalid token purpose.' });
     }
 
-    if (!crypto.timingSafeEqual(Buffer.from(otp.trim()), Buffer.from(payload.otp))) {
+    const otpInput = Buffer.from(otp.trim());
+    const otpStored = Buffer.from(payload.otp);
+    if (
+      otpInput.length !== otpStored.length ||
+      !crypto.timingSafeEqual(otpInput, otpStored)
+    ) {
       return res.status(400).json({ error: 'Incorrect verification code.' });
     }
 

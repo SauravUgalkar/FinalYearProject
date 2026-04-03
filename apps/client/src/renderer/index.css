@@ -2,20 +2,127 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Override Tailwind grays to ensure dark UI (used across the app) */
-.bg-gray-950 { background-color: #030712 !important; }
-.bg-gray-900 { background-color: #0b0b0f !important; }
-.bg-gray-800 { background-color: #111827 !important; }
-.bg-gray-700 { background-color: #1f2937 !important; }
-.border-gray-900 { border-color: #0f172a !important; }
-.border-gray-800 { border-color: #1f2937 !important; }
-.border-gray-700 { border-color: #374151 !important; }
-.text-gray-100 { color: #f3f4f6 !important; }
-.text-gray-200 { color: #e5e7eb !important; }
-.text-gray-300 { color: #d1d5db !important; }
-.text-gray-400 { color: #9ca3af !important; }
-.text-gray-500 { color: #6b7280 !important; }
+/* ============================================================
+   DARK MODE — Override Tailwind grays to keep the dark UI.
+   Scoped to html.dark so the light theme can override cleanly.
+   ============================================================ */
+html.dark .bg-gray-950 { background-color: #030712 !important; }
+html.dark .bg-gray-900 { background-color: #0b0b0f !important; }
+html.dark .bg-gray-800 { background-color: #111827 !important; }
+html.dark .bg-gray-700 { background-color: #1f2937 !important; }
+html.dark .border-gray-900 { border-color: #0f172a !important; }
+html.dark .border-gray-800 { border-color: #1f2937 !important; }
+html.dark .border-gray-700 { border-color: #374151 !important; }
+html.dark .text-gray-100 { color: #f3f4f6 !important; }
+html.dark .text-gray-200 { color: #e5e7eb !important; }
+html.dark .text-gray-300 { color: #d1d5db !important; }
+html.dark .text-gray-400 { color: #9ca3af !important; }
+html.dark .text-gray-500 { color: #6b7280 !important; }
 
+/* ============================================================
+   LIGHT MODE — Override the dark utility classes above and the
+   slate/white utilities used in Header, Footer, and public pages.
+   ============================================================ */
+
+/* Body & root */
+html.light body,
+html.light #root {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* Custom gray backgrounds */
+html.light .bg-gray-950 { background-color: #e2e8f0 !important; }
+html.light .bg-gray-900 { background-color: #f8fafc !important; }
+html.light .bg-gray-800 { background-color: #f1f5f9 !important; }
+html.light .bg-gray-700 { background-color: #e2e8f0 !important; }
+
+/* Custom gray borders */
+html.light .border-gray-900 { border-color: #cbd5e1 !important; }
+html.light .border-gray-800 { border-color: #e2e8f0 !important; }
+html.light .border-gray-700 { border-color: #94a3b8 !important; }
+
+/* Custom gray text — ensures readability on light backgrounds */
+html.light .text-gray-100 { color: #0f172a !important; }
+html.light .text-gray-200 { color: #1e293b !important; }
+html.light .text-gray-300 { color: #334155 !important; }
+html.light .text-gray-400 { color: #475569 !important; }
+html.light .text-gray-500 { color: #64748b !important; }
+
+/* Slate text used in public pages */
+html.light .text-white   { color: #0f172a !important; }
+html.light .text-slate-100 { color: #1e293b !important; }
+html.light .text-slate-200 { color: #334155 !important; }
+html.light .text-slate-300 { color: #475569 !important; }
+html.light .text-slate-400 { color: #64748b !important; }
+
+/* Opacity-modified borders */
+html.light .border-white\/10 { border-color: rgba(15,23,42,0.1) !important; }
+html.light .border-white\/15 { border-color: rgba(15,23,42,0.15) !important; }
+html.light .border-white\/20 { border-color: rgba(15,23,42,0.2) !important; }
+
+/* Page-level background containers (Landing, Features, UseCases, Docs) */
+html.light .min-h-screen {
+  background: linear-gradient(135deg, #f0f9ff 0%, #f8fafc 50%, #eef2ff 100%) !important;
+  color: #0f172a !important;
+}
+
+/* Glassmorphism card panels used on public pages */
+html.light .backdrop-blur,
+html.light .backdrop-blur-xl,
+html.light .backdrop-blur-sm {
+  --tw-backdrop-blur: blur(12px);
+}
+
+/* Hover utility overrides */
+html.light .hover\:bg-white\/10:hover { background-color: rgba(15,23,42,0.06) !important; }
+
+/* File tree overrides */
+html.light .file-tree-row { color: #334155 !important; }
+html.light .file-tree-row:hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+html.light .file-tree-row-selected {
+  background-color: #0891b2 !important;
+  color: #ffffff !important;
+}
+
+/* Scrollbars */
+html.light ::-webkit-scrollbar-track { background: #f1f5f9; }
+html.light ::-webkit-scrollbar-thumb { background: #94a3b8; }
+html.light ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* ============================================================
+   TEXT SELECTION COLOURS
+   Matches the project's cyan accent (#0891b2) in both modes.
+   ============================================================ */
+html.dark  ::selection       { background-color: #0891b2; color: #f8fafc; }
+html.dark  ::-moz-selection  { background-color: #0891b2; color: #f8fafc; }
+html.light ::selection       { background-color: #0891b2; color: #ffffff; }
+html.light ::-moz-selection  { background-color: #0891b2; color: #ffffff; }
+
+/* ============================================================
+   THEME RIPPLE OVERLAY
+   Triggered by ThemeContext; expands from cursor position.
+   ============================================================ */
+.theme-ripple-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  pointer-events: none;
+  animation: theme-ripple-expand 0.65s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes theme-ripple-expand {
+  0%   { clip-path: circle(0% at var(--ripple-x) var(--ripple-y)); opacity: 1; }
+  72%  { opacity: 1; }
+  100% { clip-path: circle(150% at var(--ripple-x) var(--ripple-y)); opacity: 0; }
+}
+
+/* ============================================================
+   GLOBAL RESET & BASE
+   ============================================================ */
 * {
   margin: 0;
   padding: 0;
@@ -36,7 +143,7 @@ code {
   font-family: 'Fira Code', monospace;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling (dark defaults; overridden above for light mode) */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -60,7 +167,7 @@ code {
   font-family: 'Fira Code', monospace;
 }
 
-/* File tree row colors are forced to avoid theme/global overrides causing white-on-white hover */
+/* File tree row colors (dark defaults; overridden above for light mode) */
 .file-tree-row {
   color: #d1d5db !important;
 }
@@ -75,7 +182,8 @@ code {
   color: #ffffff !important;
 }
 
-/* Smooth transitions */
+/* Smooth transitions for theme switching */
 * {
   transition: background-color 0.2s, color 0.2s, border-color 0.2s;
 }
+
