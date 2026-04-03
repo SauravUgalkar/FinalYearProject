@@ -136,7 +136,7 @@ export default function Analytics({
       );
       const techStack = languagesUsed.length > 0
         ? languagesUsed.join(', ')
-        : (projectLanguage || 'javascript');
+        : (projectLanguage || 'Not specified');
 
       autoTable(doc, {
         startY: y,
