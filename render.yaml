@@ -30,6 +30,8 @@ services:
         sync: false
       - key: GITHUB_TOKEN_ENC_KEY
         sync: false
+      - key: WORKER_WAKE_URL
+        sync: false
 
   - type: worker
     name: collab-code-worker

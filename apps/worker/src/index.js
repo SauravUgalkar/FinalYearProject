@@ -13,25 +13,40 @@ const execAsync = promisify(exec);
 const redisClient = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null,
   retryStrategy: (times) => {
-    if (times > 3) {
-      console.error('❌ Could not connect to Redis. Make sure Redis is running.');
-      console.error('💡 Start Redis with: docker compose up -d redis');
-      console.error('💡 Or install Redis locally and run: redis-server');
-      return null; // Stop retrying
+    const delayMs = Math.min(1000 * Math.pow(2, Math.min(times, 6)), 30000);
+    if (times === 1) {
+      console.warn('Redis not ready yet, retrying connection...');
     }
-    return Math.min(times * 100, 3000);
+    return delayMs;
   },
+  reconnectOnError: () => true,
 });
 
 let redisConnected = false;
+let redisState = 'connecting';
 redisClient.on('error', (err) => {
-  if (!redisConnected) {
-    console.error('Redis connection failed');
-  }
+  redisState = 'error';
+  console.error('Redis connection error:', err.message || err);
 });
 redisClient.on('connect', () => {
   redisConnected = true;
+  redisState = 'connected';
   console.log('Redis connected');
+});
+redisClient.on('ready', () => {
+  redisConnected = true;
+  redisState = 'ready';
+  console.log('Redis ready');
+});
+redisClient.on('reconnecting', () => {
+  redisConnected = false;
+  redisState = 'reconnecting';
+  console.log('Redis reconnecting...');
+});
+redisClient.on('end', () => {
+  redisConnected = false;
+  redisState = 'ended';
+  console.warn('Redis connection ended; waiting for reconnect');
 });
 
 const EXECUTION_DIR = '/tmp/code-execution';
@@ -626,17 +641,7 @@ worker.on('error', (err) => {
 // Start worker (ioredis connects lazily via BullMQ)
 console.log('🚀 Code Execution Worker starting...');
 console.log('⏳ Connecting to Redis...');
-
-// Check Redis connection after a delay
-setTimeout(() => {
-  if (!redisConnected) {
-    console.error('\n⚠️  Worker cannot start without Redis connection.');
-    console.error('   Exiting...\n');
-    process.exit(1);
-  } else {
-    console.log('✅ Worker is ready and listening for code execution jobs');
-  }
-}, 5000);
+console.log('🔁 Worker will keep retrying Redis connection until available');
 
 // Optional health endpoint so the worker can run as a Render Web Service
 // when Background Worker is unavailable on the current plan.
@@ -657,7 +662,7 @@ healthServer = http.createServer((req, res) => {
 
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', service: 'worker', redisConnected }));
+    res.end(JSON.stringify({ status: 'ok', service: 'worker', redisConnected, redisState }));
     return;
   }
 

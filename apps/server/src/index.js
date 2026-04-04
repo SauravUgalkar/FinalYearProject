@@ -5,6 +5,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
+const axios = require("axios");
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const IORedis = require("ioredis");
@@ -35,6 +36,8 @@ const EXEC_QUEUE_KEEP_FAILED_COUNT = Number(process.env.EXEC_QUEUE_KEEP_FAILED_C
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
+const WORKER_WAKE_URL = String(process.env.WORKER_WAKE_URL || '').trim();
+const WORKER_WAKE_COOLDOWN_MS = Number(process.env.WORKER_WAKE_COOLDOWN_MS || 60000);
 
 if (!MONGODB_URI) {
   logger.error("MONGODB_URI is not defined in environment");
@@ -46,6 +49,40 @@ if (!MONGODB_URI) {
 // -----------------------------------------------------------------------------
 const app = express();
 const server = http.createServer(app);
+let workerWakeInFlight = null;
+let lastWorkerWakeAttemptAt = 0;
+
+const triggerWorkerWake = async (reason = 'unknown') => {
+  if (!WORKER_WAKE_URL) return;
+
+  const now = Date.now();
+  if (workerWakeInFlight) return workerWakeInFlight;
+  if (now - lastWorkerWakeAttemptAt < WORKER_WAKE_COOLDOWN_MS) return;
+
+  lastWorkerWakeAttemptAt = now;
+  workerWakeInFlight = axios
+    .get(WORKER_WAKE_URL, {
+      timeout: 5000,
+      validateStatus: () => true,
+    })
+    .then((response) => {
+      logger.info('Worker wake ping sent', {
+        reason,
+        status: response.status,
+      });
+    })
+    .catch((error) => {
+      logger.warn('Worker wake ping failed', {
+        reason,
+        message: error.message,
+      });
+    })
+    .finally(() => {
+      workerWakeInFlight = null;
+    });
+
+  return workerWakeInFlight;
+};
 
 // Security middleware
 const helmet = require('helmet');
@@ -560,10 +597,16 @@ mongoose
 // -----------------------------------------------------------------------------
 // ROUTES
 // -----------------------------------------------------------------------------
+app.use('/api', (req, res, next) => {
+  void triggerWorkerWake('api-request');
+  next();
+});
+
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
+    workerWakeConfigured: Boolean(WORKER_WAKE_URL),
   });
 });
 
@@ -870,6 +913,7 @@ server.listen(PORT, () => {
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
   });
+  void triggerWorkerWake('server-start');
 });
 
 // -----------------------------------------------------------------------------
