@@ -5,6 +5,16 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   avatar: { type: String },
+  role: { type: String, default: 'Full Stack Developer' },
+  bio: { type: String, default: 'Building reliable developer tools and collaborative experiences.' },
+  avgExecutionTime: { type: String, default: '420 ms' },
+  profileProjects: [
+    {
+      title: { type: String, required: true },
+      description: { type: String, default: '' },
+      techStack: [{ type: String }],
+    }
+  ],
   githubId: { type: String },
   githubUsername: { type: String },
   githubAvatarUrl: { type: String },

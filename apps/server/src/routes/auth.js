@@ -354,13 +354,102 @@ router.get('/profile', verifyToken, async (req, res) => {
   }
 });
 
+const MAX_AVATAR_CHARS = Number(process.env.MAX_PROFILE_AVATAR_CHARS || 2000000);
+
+const sanitizeSkills = (skills) => {
+  if (!Array.isArray(skills)) return undefined;
+  return Array.from(
+    new Set(
+      skills
+        .map((skill) => String(skill || '').trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 100);
+};
+
+const sanitizeProjects = (projects) => {
+  if (!Array.isArray(projects)) return undefined;
+
+  return projects
+    .map((project) => ({
+      title: String(project?.title || '').trim(),
+      description: String(project?.description || '').trim(),
+      techStack: Array.isArray(project?.techStack)
+        ? Array.from(
+            new Set(
+              project.techStack
+                .map((tech) => String(tech || '').trim())
+                .filter(Boolean)
+            )
+          ).slice(0, 20)
+        : [],
+    }))
+    .filter((project) => project.title)
+    .slice(0, 50);
+};
+
 // Update profile
 router.put('/profile', verifyToken, async (req, res) => {
   try {
-    const { name, codingLanguages } = req.body;
+    const {
+      name,
+      email,
+      role,
+      bio,
+      codingLanguages,
+      avatar,
+      avgExecutionTime,
+      profileProjects,
+    } = req.body || {};
+
+    const updatePayload = { updatedAt: new Date() };
+
+    if (typeof name === 'string' && name.trim()) {
+      updatePayload.name = name.trim();
+    }
+
+    if (typeof role === 'string') {
+      updatePayload.role = role.trim().slice(0, 120);
+    }
+
+    if (typeof bio === 'string') {
+      updatePayload.bio = bio.trim().slice(0, 2000);
+    }
+
+    if (typeof avgExecutionTime === 'string') {
+      updatePayload.avgExecutionTime = avgExecutionTime.trim().slice(0, 80);
+    }
+
+    const sanitizedSkills = sanitizeSkills(codingLanguages);
+    if (sanitizedSkills) {
+      updatePayload.codingLanguages = sanitizedSkills;
+    }
+
+    const sanitizedProjects = sanitizeProjects(profileProjects);
+    if (sanitizedProjects) {
+      updatePayload.profileProjects = sanitizedProjects;
+    }
+
+    if (typeof avatar === 'string') {
+      const trimmedAvatar = avatar.trim();
+      if (trimmedAvatar.length > MAX_AVATAR_CHARS) {
+        return res.status(400).json({ error: 'Avatar image is too large.' });
+      }
+      updatePayload.avatar = trimmedAvatar;
+    }
+
+    if (typeof email === 'string' && email.trim()) {
+      const nextEmail = email.toLowerCase().trim();
+      const emailOwner = await User.findOne({ email: nextEmail }).select('_id');
+      if (emailOwner && String(emailOwner._id) !== String(req.userId)) {
+        return res.status(409).json({ error: 'Email is already in use.' });
+      }
+      updatePayload.email = nextEmail;
+    }
+
     const user = await User.findByIdAndUpdate(
       req.userId,
-      { name, codingLanguages, updatedAt: new Date() },
+      updatePayload,
       { new: true }
     ).select('-password');
 
