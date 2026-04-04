@@ -73,7 +73,7 @@ export default function Profile() {
   return (
     <div className="min-h-screen bg-gray-900">
       <Navbar showLogout={true} onLogout={handleLogout} />
-      <div className="p-8">
+      <div className="px-4 sm:p-8 pb-24 md:pb-8">
         <div className="max-w-4xl mx-auto">
           <div className="mb-6">
             <button

@@ -25,7 +25,7 @@ export default function DocsTroubleshootingPage() {
     <DocsLayout title="Troubleshooting" description="Short fixes for common workflow issues.">
       <div className="space-y-4">
         {issues.map((item) => (
-          <article key={item.issue} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+          <article key={item.issue} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
             <h2 className="text-base font-semibold text-white">{item.issue}</h2>
             <p className="mt-2 text-sm leading-7 text-slate-300">Fix: {item.fix}</p>
           </article>

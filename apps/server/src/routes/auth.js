@@ -404,4 +404,165 @@ router.post('/logout', verifyToken, async (req, res) => {
   }
 });
 
+// Step 1 – Forgot Password: validate email, send OTP, return resetToken
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Validate input
+    if (!email || !email.trim()) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const trimmedEmail = email.toLowerCase().trim();
+
+    // Check if user exists
+    let user;
+    try {
+      user = await User.findOne({ email: trimmedEmail });
+    } catch (dbErr) {
+      console.error('Database error checking user:', dbErr);
+      return res.status(503).json({ error: 'Database connection error. Please try again.' });
+    }
+
+    if (!user) {
+      // Don't reveal if email exists or not (security best practice)
+      // But still generate OTP to maintain consistent response time
+      console.log(`Forgot password requested for non-existent email: ${trimmedEmail}`);
+      return res.status(200).json({
+        message: 'If an account exists with this email, a verification code has been sent.',
+      });
+    }
+
+    // Generate OTP and embed it in a short-lived JWT
+    const otp = generateOtp();
+    let resetToken;
+    try {
+      resetToken = jwt.sign(
+        {
+          purpose: 'password-reset',
+          otp,
+          email: trimmedEmail,
+          userId: user._id,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: OTP_EXPIRY_SECONDS }
+      );
+    } catch (tokenErr) {
+      console.error('Reset token generation error:', tokenErr);
+      return res.status(500).json({ error: 'Failed to generate reset token' });
+    }
+
+    // Send OTP email
+    try {
+      await sendOtpEmail(trimmedEmail, otp, user.name);
+    } catch (emailErr) {
+      console.error('OTP email send error:', emailErr);
+      return res.status(500).json({ error: 'Failed to send verification email. Please try again.' });
+    }
+
+    console.log(`Password reset OTP sent for user: ${trimmedEmail}`);
+    res.status(200).json({
+      message: 'Verification code sent to your email.',
+      resetToken,
+    });
+  } catch (err) {
+    console.error('Forgot password endpoint error:', err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: 'Internal server error during password reset request' });
+  }
+});
+
+// Step 2 – Verify Forgot Password OTP: confirm code, update password, return auth token
+router.post('/verify-forgot-password', async (req, res) => {
+  try {
+    const { resetToken, otp, newPassword } = req.body;
+
+    if (!resetToken || !otp || !newPassword) {
+      return res.status(400).json({ error: 'resetToken, otp, and newPassword are required' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    // Decode and verify the reset token
+    let payload;
+    try {
+      payload = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+      }
+      return res.status(400).json({ error: 'Invalid verification token.' });
+    }
+
+    if (payload.purpose !== 'password-reset') {
+      return res.status(400).json({ error: 'Invalid token purpose.' });
+    }
+
+    // Compare OTPs using timing-safe comparison
+    const otpInput = Buffer.from(otp.trim());
+    const otpStored = Buffer.from(payload.otp);
+    if (
+      otpInput.length !== otpStored.length ||
+      !crypto.timingSafeEqual(otpInput, otpStored)
+    ) {
+      return res.status(400).json({ error: 'Incorrect verification code.' });
+    }
+
+    // Hash the new password
+    let hashedPassword;
+    try {
+      hashedPassword = await bcrypt.hash(newPassword, 10);
+    } catch (hashErr) {
+      console.error('Password hashing error:', hashErr);
+      return res.status(500).json({ error: 'Failed to process password' });
+    }
+
+    // Update user password
+    let user;
+    try {
+      user = await User.findByIdAndUpdate(
+        payload.userId,
+        { password: hashedPassword, updatedAt: new Date() },
+        { new: true }
+      );
+    } catch (updateErr) {
+      console.error('User update error:', updateErr);
+      return res.status(500).json({ error: 'Failed to update password' });
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Generate auth token
+    let token;
+    try {
+      token = jwt.sign(
+        { userId: user._id },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+    } catch (tokenErr) {
+      console.error('Token generation error:', tokenErr);
+      return res.status(500).json({ error: 'Failed to generate auth token' });
+    }
+
+    console.log(`Password reset successfully for user: ${user.email}`);
+    res.status(200).json({
+      message: 'Password reset successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+      },
+      token,
+    });
+  } catch (err) {
+    console.error('Verify forgot password endpoint error:', err && err.stack ? err.stack : err);
+    return res.status(500).json({ error: 'Internal server error during password reset verification' });
+  }
+});
+
 module.exports = router;

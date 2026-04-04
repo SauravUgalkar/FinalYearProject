@@ -7,7 +7,7 @@ export default function DocsGettingStartedPage() {
       title="Getting Started"
       description="Set up your account, create a project, and start working in a few minutes."
     >
-      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
         <h2 className="text-lg font-semibold text-white">Quick Start</h2>
         <ul className="mt-3 space-y-2 text-sm leading-7 text-slate-300">
           <li>1. Log in with CollabCode or GitHub.</li>

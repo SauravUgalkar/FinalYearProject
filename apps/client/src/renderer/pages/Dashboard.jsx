@@ -260,7 +260,7 @@ export default function Dashboard() {
       {/* Invite bell + panel (appears when this user has pending invites) */}
       <JoinRequestNotification socket={socket} />
       
-      <div className="relative z-10 mx-auto max-w-7xl px-6 py-8">
+      <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8 mb-20 md:mb-0">
         
         {/* Header */}
         <div className="mb-8">

@@ -7,7 +7,7 @@ import { BookOpen } from 'lucide-react';
 
 export function DocTopic({ title, what, how, points }) {
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 shadow-[0_10px_40px_rgba(2,6,23,0.18)]">
+    <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5 shadow-[0_10px_40px_rgba(2,6,23,0.18)]">
       <h2 className="text-lg font-semibold text-white">{title}</h2>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div>
@@ -37,9 +37,9 @@ export default function DocsLayout({ title, description, children }) {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_10%_10%,_rgba(34,211,238,0.14),_transparent_30%),radial-gradient(circle_at_90%_15%,_rgba(251,146,60,0.12),_transparent_25%),linear-gradient(180deg,_#020617_0%,_#111827_60%,_#0f172a_100%)] text-white">
       <Header />
-      <div className="mx-auto grid max-w-7xl gap-8 px-6 py-10 sm:px-8 lg:grid-cols-[280px_1fr] lg:px-10">
+      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-8 sm:gap-8 sm:px-6 sm:py-10 lg:grid-cols-[280px_1fr] lg:px-10">
         <aside>
-          <div className="sticky top-24 rounded-2xl border border-white/10 bg-slate-950/60 p-6 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
+          <div className="sticky top-24 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:p-6 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
             <div className="mb-6 flex items-center gap-3">
               <div className="rounded-lg border border-cyan-300/25 bg-cyan-300/10 p-2 text-cyan-200">
                 <BookOpen size={18} />

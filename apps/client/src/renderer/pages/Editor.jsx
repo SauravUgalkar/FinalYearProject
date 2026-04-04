@@ -1884,9 +1884,9 @@ export default function EditorPage() {
   const unreadChatCount = unreadCounts[projectId] || 0;
 
   return (
-    <div className="flex h-screen bg-gray-950 text-gray-100">
+    <div className="flex h-screen bg-gray-950 text-gray-100 mb-20 md:mb-0">
       {/* Left Icon Sidebar */}
-      <div className="w-16 bg-gray-900 border-r border-gray-800 flex flex-col items-center py-4 gap-4 shadow-lg">
+      <div className="w-12 sm:w-16 bg-gray-900 border-r border-gray-800 flex flex-col items-center py-3 sm:py-4 gap-3 sm:gap-4 shadow-lg">
         <button
           onClick={handleBack}
           className="p-3 rounded-lg bg-gray-800 hover:bg-blue-600 text-gray-400 hover:text-white transition-all"
@@ -1978,7 +1978,7 @@ export default function EditorPage() {
       {/* Main Content Panel */}
       <div className="flex-1 flex">
         {/* Side Panel with Content */}
-        <div className="w-80 bg-gray-900 border-r border-gray-800 flex flex-col shadow-lg">
+        <div className="w-56 sm:w-80 bg-gray-900 border-r border-gray-800 flex flex-col shadow-lg">
           {/* Panel Header */}
           <div className="px-6 py-4 border-b border-gray-800">
             <h2 className="text-lg font-bold text-white">
@@ -2002,7 +2002,7 @@ export default function EditorPage() {
           {/* Panel Content */}
           <div className="flex-1 overflow-hidden flex flex-col">
             {sidebarTab === 'files' && (
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 overflow-auto tab-transition">
                 <FileTree
                   files={files}
                   currentFile={currentFile}
@@ -2016,7 +2016,7 @@ export default function EditorPage() {
               </div>
             )}
             {sidebarTab === 'git' && (
-              <div className="flex-1 overflow-auto flex flex-col">
+              <div className="flex-1 overflow-auto flex flex-col tab-transition">
                 {userRole === 'admin' && (
                   <div className="px-3 pt-3 pb-1">
                     <button
@@ -2032,12 +2032,12 @@ export default function EditorPage() {
               </div>
             )}
             {sidebarTab === 'chat' && (
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 overflow-auto tab-transition">
                 <Chat roomId={projectId} onlineUsers={onlineUsers} />
               </div>
             )}
             {sidebarTab === 'analytics' && (
-              <div className="flex-1 overflow-auto p-4">
+              <div className="flex-1 overflow-auto p-4 tab-transition">
                 <Analytics
                   projectId={projectId}
                   socket={socket}
@@ -2053,7 +2053,7 @@ export default function EditorPage() {
               </div>
             )}
             {sidebarTab === 'export' && (
-              <div className="flex-1 overflow-auto p-4">
+              <div className="flex-1 overflow-auto p-4 tab-transition">
                 <ExportModal
                   isOpen={true}
                   onClose={() => setSidebarTab('files')}
@@ -2064,7 +2064,7 @@ export default function EditorPage() {
               </div>
             )}
             {sidebarTab === 'settings' && (
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 overflow-auto tab-transition">
                 <Settings 
                   projectId={projectId}
                   onClose={() => setSidebarTab('files')}

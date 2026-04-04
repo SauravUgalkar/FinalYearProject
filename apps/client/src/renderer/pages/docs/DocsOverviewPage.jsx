@@ -30,7 +30,7 @@ export default function DocsOverviewPage() {
       title="CollabCode Documentation"
       description="Quick guides for setup, editing, collaboration, and day-to-day use."
     >
-      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
         <h2 className="text-lg font-semibold text-white">What this docs section covers</h2>
         <ul className="mt-3 space-y-2 text-sm leading-7 text-slate-300">
           <li>• How to start a project and invite people</li>
@@ -40,7 +40,7 @@ export default function DocsOverviewPage() {
       </section>
       <div className="grid gap-4 md:grid-cols-3">
         {cards.map(({ title, description, to, icon: Icon }) => (
-          <Link key={title} to={to} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 transition hover:-translate-y-1 hover:border-cyan-300/30">
+          <Link key={title} to={to} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5 transition hover:-translate-y-1 hover:border-cyan-300/30">
             <div className="inline-flex rounded-xl border border-cyan-300/20 bg-cyan-300/10 p-2 text-cyan-100">
               <Icon size={16} />
             </div>

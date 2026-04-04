@@ -25,10 +25,15 @@ import DocsRolesPage from './pages/docs/DocsRolesPage';
 import DocsTroubleshootingPage from './pages/docs/DocsTroubleshootingPage';
 import DocsFaqPage from './pages/docs/DocsFaqPage';
 
-// Components
+// Layout Components
+import MobileBottomNav from './components/layout/MobileBottomNav';
 
 // Utils
 import { useAuthContext } from './hooks/useAuth';
+import { authStorage } from './services/authStorage';
+import axios from 'axios';
+import { API_URL } from './config/runtime';
+import { disconnectSocket } from './hooks/useSocket';
 
 // Suppress ResizeObserver errors from Monaco Editor (non-critical)
 const originalError = console.error;
@@ -80,6 +85,29 @@ function App() {
     setMounted(true);
   }, []);
 
+  const handleLogout = async () => {
+    // Disconnect socket before logout
+    disconnectSocket();
+
+    const token = authStorage.getToken();
+    if (token) {
+      try {
+        await axios.post(`${API_URL}/auth/logout`, {}, { 
+          headers: authStorage.getAuthHeaders() 
+        });
+      } catch (error) {
+        console.error('Logout error:', error);
+      }
+    }
+
+    // Clear storage
+    authStorage.removeToken();
+    authStorage.removeUser();
+
+    // Reload to clear state and redirect to home
+    window.location.href = '/';
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -91,55 +119,60 @@ function App() {
   return (
     <ThemeProvider>
       <Router>
-        <Routes>
-          <Route
-            path="/"
-            element={<LandingPage />}
-          />
-          <Route
-            path="/login"
-            element={<Login />}
-          />
-          <Route
-            path="/register"
-            element={user ? <Navigate to="/dashboard" /> : <Register />}
-          />
-          <Route
-            path="/features"
-            element={<FeaturesPage />}
-          />
-          <Route
-            path="/use-cases"
-            element={<UseCasesPage />}
-          />
-          <Route
-            path="/docs"
-            element={<DocsPage />}
-          />
-          <Route path="/docs/getting-started" element={<DocsGettingStartedPage />} />
-          <Route path="/docs/editor" element={<DocsEditorPage />} />
-          <Route path="/docs/collaboration" element={<DocsCollaborationPage />} />
-          <Route path="/docs/projects" element={<DocsProjectsPage />} />
-          <Route path="/docs/execution" element={<DocsExecutionPage />} />
-          <Route path="/docs/chat" element={<DocsChatPage />} />
-          <Route path="/docs/git" element={<DocsGitPage />} />
-          <Route path="/docs/roles" element={<DocsRolesPage />} />
-          <Route path="/docs/troubleshooting" element={<DocsTroubleshootingPage />} />
-          <Route path="/docs/faq" element={<DocsFaqPage />} />
-          <Route
-            path="/dashboard"
-            element={<ProtectedRoute element={<Dashboard />} user={user} />}
-          />
-          <Route
-            path="/editor/:projectId"
-            element={<ProtectedRoute element={<Editor />} user={user} />}
-          />
-          <Route path="/github/callback" element={<GithubCallback />} />
-          <Route
-            path="/profile"
-            element={<ProtectedRoute element={<Profile />} user={user} />}
-          />
-        </Routes>
+        <div className="flex flex-col min-h-screen">
+          <main className="flex-1">
+            <Routes>
+              <Route
+                path="/"
+                element={<div className="page-transition"><LandingPage /></div>}
+              />
+              <Route
+                path="/login"
+                element={<div className="page-transition"><Login /></div>}
+              />
+              <Route
+                path="/register"
+                element={user ? <Navigate to="/dashboard" /> : <div className="page-transition"><Register /></div>}
+              />
+              <Route
+                path="/features"
+                element={<div className="page-transition"><FeaturesPage /></div>}
+              />
+              <Route
+                path="/use-cases"
+                element={<div className="page-transition"><UseCasesPage /></div>}
+              />
+              <Route
+                path="/docs"
+                element={<div className="page-transition"><DocsPage /></div>}
+              />
+              <Route path="/docs/getting-started" element={<div className="page-transition"><DocsGettingStartedPage /></div>} />
+              <Route path="/docs/editor" element={<div className="page-transition"><DocsEditorPage /></div>} />
+              <Route path="/docs/collaboration" element={<div className="page-transition"><DocsCollaborationPage /></div>} />
+              <Route path="/docs/projects" element={<div className="page-transition"><DocsProjectsPage /></div>} />
+              <Route path="/docs/execution" element={<div className="page-transition"><DocsExecutionPage /></div>} />
+              <Route path="/docs/chat" element={<div className="page-transition"><DocsChatPage /></div>} />
+              <Route path="/docs/git" element={<div className="page-transition"><DocsGitPage /></div>} />
+              <Route path="/docs/roles" element={<div className="page-transition"><DocsRolesPage /></div>} />
+              <Route path="/docs/troubleshooting" element={<div className="page-transition"><DocsTroubleshootingPage /></div>} />
+              <Route path="/docs/faq" element={<div className="page-transition"><DocsFaqPage /></div>} />
+              <Route
+                path="/dashboard"
+                element={<ProtectedRoute element={<div className="page-transition"><Dashboard /></div>} user={user} />}
+              />
+              <Route
+                path="/editor/:projectId"
+                element={<ProtectedRoute element={<div className="page-transition"><Editor /></div>} user={user} />}
+              />
+              <Route path="/github/callback" element={<GithubCallback />} />
+              <Route
+                path="/profile"
+                element={<ProtectedRoute element={<div className="page-transition"><Profile /></div>} user={user} />}
+              />
+            </Routes>
+          </main>
+          <MobileBottomNav onLogout={handleLogout} />
+        </div>
       </Router>
     </ThemeProvider>
   );

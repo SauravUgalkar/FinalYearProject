@@ -25,7 +25,7 @@ export default function DocsUseCasesPage() {
     <DocsLayout title="Use Cases" description="See how different audiences apply CollabCode in practical workflows.">
       <div className="grid gap-4 md:grid-cols-2">
         {useCases.map((item) => (
-          <article key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+          <article key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 sm:p-5">
             <h2 className="text-lg font-semibold text-white">{item.title}</h2>
             <p className="mt-2 text-sm leading-7 text-slate-300">{item.description}</p>
           </article>

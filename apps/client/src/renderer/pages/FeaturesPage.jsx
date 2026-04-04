@@ -111,7 +111,7 @@ export default function FeaturesPage() {
       <Header />
 
       <main className="mx-auto max-w-7xl px-6 py-12 sm:px-8 lg:px-10">
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-8 shadow-[0_18px_80px_rgba(2,6,23,0.34)] backdrop-blur sm:p-10">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 sm:p-8 shadow-[0_18px_80px_rgba(2,6,23,0.34)] backdrop-blur">
           <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Powerful Features</h1>
           <p className="mt-4 max-w-3xl text-lg leading-8 text-slate-300">
             Everything you need for collaborative coding, from real-time editing to code execution and GitHub integration.
@@ -146,7 +146,7 @@ export default function FeaturesPage() {
           </div>
         </section>
 
-        <section className="mt-16 rounded-3xl border border-white/10 bg-cyan-300/10 p-8 text-center shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
+        <section className="mt-16 rounded-3xl border border-white/10 bg-cyan-300/10 p-6 sm:p-8 text-center shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
           <h2 className="text-3xl font-semibold tracking-tight">Ready to explore these features?</h2>
           <p className="mx-auto mt-3 max-w-2xl text-slate-200">Start with our detailed documentation or jump straight to building.</p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">

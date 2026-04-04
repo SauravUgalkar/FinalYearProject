@@ -92,7 +92,7 @@ export default function UseCasesPage() {
             return (
               <div
                 key={useCase.title}
-                className={`rounded-3xl border ${useCase.borderColor} bg-gradient-to-br ${useCase.color} p-8 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur sm:p-10`}
+                className={`rounded-3xl border ${useCase.borderColor} bg-gradient-to-br ${useCase.color} p-6 sm:p-8 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur`}
               >
                 <div className="grid gap-8 md:grid-cols-[auto_1fr]">
                   <div className="flex h-fit flex-col gap-4">

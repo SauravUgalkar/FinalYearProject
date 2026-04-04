@@ -58,7 +58,7 @@ export default function LandingPage() {
       <Header />
 
       <main className="mx-auto max-w-7xl px-6 py-10 sm:px-8 lg:px-10">
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-8 shadow-[0_18px_80px_rgba(2,6,23,0.34)] backdrop-blur sm:p-10">
+        <section className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-6 sm:p-8 shadow-[0_18px_80px_rgba(2,6,23,0.34)] backdrop-blur">
           <p className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-100">
             <Sparkles size={12} />
             Modern Collaborative SaaS
@@ -83,7 +83,7 @@ export default function LandingPage() {
 
         <section className="mt-14">
           <h2 className="text-3xl font-semibold tracking-tight">Built for Every Audience</h2>
-          <div className="mt-8 grid gap-5 lg:grid-cols-3">
+          <div className="mt-8 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
             {audienceCards.map(({ title, icon: Icon, points }) => (
               <article key={title} className="rounded-3xl border border-white/10 bg-slate-950/60 p-6 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
                 <div className="inline-flex rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-cyan-100">
@@ -103,7 +103,7 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="mt-14 rounded-3xl border border-white/10 bg-white/[0.04] p-8 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
+        <section className="mt-14 rounded-3xl border border-white/10 bg-white/[0.04] p-6 sm:p-8 shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
           <h2 className="text-3xl font-semibold tracking-tight">How It Works</h2>
           <ol className="mt-8 grid gap-4 md:grid-cols-5">
             {workflowSteps.map(({ title, icon: Icon }, index) => (
@@ -120,7 +120,7 @@ export default function LandingPage() {
           </ol>
         </section>
 
-        <section className="mt-14 rounded-3xl border border-white/10 bg-cyan-300/10 p-8 text-center shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
+        <section className="mt-14 rounded-3xl border border-white/10 bg-cyan-300/10 p-6 sm:p-8 text-center shadow-[0_16px_60px_rgba(2,6,23,0.34)] backdrop-blur">
           <h2 className="text-3xl font-semibold tracking-tight">Start Building Now</h2>
           <p className="mx-auto mt-3 max-w-2xl text-slate-200">Move from onboarding to active collaboration in minutes.</p>
           <div className="mt-6 flex flex-wrap justify-center gap-3">
