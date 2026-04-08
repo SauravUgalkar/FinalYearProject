@@ -813,6 +813,23 @@ io.on("connection", (socket) => {
     roomManager.leaveRoom(socket, data.roomId);
   });
 
+  socket.on("user-logout", (_data, ack) => {
+    console.log(`[Socket] user-logout from socket ${socket.id}`);
+
+    try {
+      const roomId = roomManager.userRoomMap.get(socket.id);
+      if (roomId) {
+        roomManager.leaveRoom(socket, roomId);
+      }
+    } catch (error) {
+      console.error('[Socket] Error handling user logout cleanup:', error);
+    } finally {
+      if (typeof ack === 'function') {
+        ack({ ok: true });
+      }
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);
     roomManager.handleDisconnect(socket);

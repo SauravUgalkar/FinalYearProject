@@ -78,9 +78,37 @@ export function useSocket() {
 // Helper function to disconnect and reset socket (called on logout)
 export function disconnectSocket() {
   if (socketInstance) {
-    console.log('[useSocket] Disconnecting socket:', socketInstance.id);
-    socketInstance.disconnect();
-    socketInstance = null;
-    isInitialized = false;
+    const socket = socketInstance;
+    let finished = false;
+    let fallbackTimer = null;
+
+    const finalize = () => {
+      if (finished) return;
+      finished = true;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+      }
+      socket.disconnect();
+      socketInstance = null;
+      isInitialized = false;
+    };
+
+    console.log('[useSocket] Disconnecting socket:', socket.id);
+
+    try {
+      const user = authStorage.getUser();
+      socket.timeout(1500).emit(
+        'user-logout',
+        {
+          userId: user?.id || user?._id,
+          userName: user?.name,
+        },
+        () => finalize()
+      );
+
+      fallbackTimer = setTimeout(finalize, 1600);
+    } catch (error) {
+      finalize();
+    }
   }
 }
